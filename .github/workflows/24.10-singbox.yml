@@ -71,8 +71,8 @@ jobs:
       - name: Create self-extracting packages
         run: |
           cd makeself
-          ./makeself.sh x86/ sing-box_${LATEST_TAG}_x86_64.run "by github action" ./install.sh
-          ./makeself.sh arm64/ sing-box_${LATEST_TAG}_aarch64_generic.run "by github action" ./install.sh
+          ./makeself.sh x86/ 24.10-sing-box_${LATEST_TAG}_x86_64.run "by github action" ./install.sh
+          ./makeself.sh arm64/ 24.10-sing-box_${LATEST_TAG}_aarch64_generic.run "by github action" ./install.sh
 
       - name: Check file sizes
         run: |
