@@ -16,7 +16,7 @@ jobs:
       - name: 📦 安装构建依赖工具
         run: |
           sudo apt-get update
-          sudo apt-get install -y makeself curl tar gawk zip unzip
+          sudo apt-get install -y makeself curl tar gawk zip unzip python3
 
       - name: 🚀 从 GitHub 拉取 HomeProxy 源码并打包
         run: |
@@ -42,15 +42,46 @@ jobs:
             cp -rf ${HOMEPROXY_SRC}/htdocs/* "$PKG_BUILD/www/"
           fi
 
-          # 2. 部署语言包资源到 /usr/share/luci/i18n/
+          # 2. 处理简体中文语言包 (PO -> JSON/LMO 兼容层)
           I18N_DIR="$PKG_BUILD/usr/share/luci/i18n"
           mkdir -p "$I18N_DIR"
 
+          PO_DIR=""
           if [ -d "${HOMEPROXY_SRC}/po/zh_Hans" ]; then
-            cp -rf ${HOMEPROXY_SRC}/po/zh_Hans/* "$I18N_DIR/" 2>/dev/null || true
+            PO_DIR="${HOMEPROXY_SRC}/po/zh_Hans"
+          elif [ -d "${HOMEPROXY_SRC}/po/zh-cn" ]; then
+            PO_DIR="${HOMEPROXY_SRC}/po/zh-cn"
+          elif [ -d "${HOMEPROXY_SRC}/po/zh_CN" ]; then
+            PO_DIR="${HOMEPROXY_SRC}/po/zh_CN"
           fi
-          if [ -d "${HOMEPROXY_SRC}/po" ]; then
-            cp -rf ${HOMEPROXY_SRC}/po/* "$I18N_DIR/" 2>/dev/null || true
+
+          if [ -n "$PO_DIR" ]; then
+            echo "🌐 找到简体中文语言目录: $PO_DIR"
+            cp -rf "$PO_DIR"/* "$I18N_DIR/" 2>/dev/null || true
+
+            python3 -c "
+            import os, json, re
+            
+            po_dir = '$PO_DIR'
+            i18n_out = '$I18N_DIR'
+            translations = {}
+            
+            for root, dirs, files in os.walk(po_dir):
+                for f in files:
+                    if f.endswith('.po'):
+                        filepath = os.path.join(root, f)
+                        with open(filepath, 'r', encoding='utf-8', errors='ignore') as pf:
+                            content = pf.read()
+                            msgids = re.findall(r'msgid \"(.*?)\"\nmsgstr \"(.*?)\"', content, re.DOTALL)
+                            for item in msgids:
+                                if item[0] and item[1]:
+                                    translations[item[0]] = item[1]
+            
+            if translations:
+                with open(os.path.join(i18n_out, 'homeproxy.zh-cn.json'), 'w', encoding='utf-8') as jf:
+                    json.dump({'': translations}, jf, ensure_ascii=False, indent=2)
+                print('✅ 已生成 homeproxy.zh-cn.json 中文语言文件')
+            " || true
           fi
 
           COMMON_TMP="${TMP_DIR}/common_apks"
@@ -143,51 +174,40 @@ jobs:
               exit 1
             fi
 
-            # 5. 生成安装脚本
-            printf '%s\n' \
-              '#!/bin/sh' \
-              'set -e' \
-              '' \
-              'echo "🚀 开始安装 HomeProxy 及其依赖..."' \
-              '' \
-              '# 1. 安装 sing-box 依赖' \
-              'SINGBOX_FILE=$(ls sing-box-*.apk 2>/dev/null | head -n 1 || true)' \
-              'if [ -n "$SINGBOX_FILE" ]; then' \
-              '    echo "📦 正在安装本地依赖包: $SINGBOX_FILE"' \
-              '    apk add --allow-untrusted "$SINGBOX_FILE" || apk add "$SINGBOX_FILE"' \
-              'else' \
-              '    echo "⚠️ 未在本地找到 sing-box.apk，尝试在线安装..."' \
-              '    apk add sing-box || true' \
-              'fi' \
-              '' \
-              '# 2. 解压部署 HomeProxy 系统文件与中文包' \
-              'HP_TGZ=$(ls luci-app-homeproxy-*.tar.gz 2>/dev/null | head -n 1)' \
-              'if [ -n "$HP_TGZ" ]; then' \
-              '    echo "📂 正在解压并部署 HomeProxy 文件与中文语言包..."' \
-              '    tar -zxf "$HP_TGZ" -C /' \
-              '    ' \
-              '    # 修复 ACL 权限文件以在后台正常显示菜单' \
-              '    mkdir -p /usr/share/luci/acl.d/' \
-              '    cat << "ACL_EOF" > /usr/share/luci/acl.d/luci-app-homeproxy.json' \
-              '{"luci-app-homeproxy":{"description":"Grant access to HomeProxy","read":{"ubus":{"homeproxy":["*"]},"uci":["homeproxy"]},"write":{"uci":["homeproxy"]}}}' \
-              'ACL_EOF' \
-              '    ' \
-              '    # 清理前端缓存（不清除 session 目录，保持在线登录状态）' \
-              '    rm -rf /tmp/luci-indexcache /tmp/luci-modulecache/ 2>/dev/null || true' \
-              '    /etc/init.d/rpcd restart 2>/dev/null || true' \
-              '    ' \
-              '    if [ -f /etc/init.d/homeproxy ]; then' \
-              '        chmod +x /etc/init.d/homeproxy' \
-              '        /etc/init.d/homeproxy enable 2>/dev/null || true' \
-              '    fi' \
-              '' \
-              '    echo "✅ HomeProxy 安装成功！刷新网页即可显示中文界面。"' \
-              'else' \
-              '    echo "❌ 错误：找不到 HomeProxy 资源文件！"' \
-              '    exit 1' \
-              'fi' > "${SAVE_DIR}/install.sh"
+            # 5. 生成安装脚本 (采用无语法风险的单引号及转义处理)
+            INSTALL_SCRIPT="${SAVE_DIR}/install.sh"
+            {
+              echo '#!/bin/sh'
+              echo 'set -e'
+              echo 'echo "🚀 开始安装 HomeProxy 及其依赖..."'
+              echo ''
+              echo 'SINGBOX_FILE=$(ls sing-box-*.apk 2>/dev/null | head -n 1 || true)'
+              echo 'if [ -n "$SINGBOX_FILE" ]; then'
+              echo '    echo "📦 正在安装本地依赖包: $SINGBOX_FILE"'
+              echo '    apk add --allow-untrusted "$SINGBOX_FILE" || apk add "$SINGBOX_FILE"'
+              echo 'else'
+              echo '    echo "⚠️ 未在本地找到 sing-box.apk，尝试在线安装..."'
+              echo '    apk add sing-box || true'
+              echo 'fi'
+              echo ''
+              echo 'HP_TGZ=$(ls luci-app-homeproxy-*.tar.gz 2>/dev/null | head -n 1 || true)'
+              echo 'if [ -n "$HP_TGZ" ]; then'
+              echo '    echo "📂 正在解压并部署 HomeProxy 文件到系统..."'
+              echo '    tar -zxf "$HP_TGZ" -C /'
+              echo '    mkdir -p /usr/share/luci/acl.d/'
+              echo '    echo '\''{"luci-app-homeproxy":{"description":"Grant access to HomeProxy","read":{"ubus":{"homeproxy":["*"]},"uci":["homeproxy"]},"write":{"uci":["homeproxy"]}}}'\'' > /usr/share/luci/acl.d/luci-app-homeproxy.json'
+              echo '    if [ -f /etc/init.d/homeproxy ]; then'
+              echo '        chmod +x /etc/init.d/homeproxy'
+              echo '        /etc/init.d/homeproxy enable 2>/dev/null || true'
+              echo '    fi'
+              echo '    echo "✅ HomeProxy 安装完成！不影响当前后台登录，请手动刷新页面。"'
+              echo 'else'
+              echo '    echo "❌ 找不到 HomeProxy 资源文件！"'
+              echo '    exit 1'
+              echo 'fi'
+            } > "$INSTALL_SCRIPT"
 
-            chmod +x "${SAVE_DIR}/install.sh"
+            chmod +x "$INSTALL_SCRIPT"
           done
 
           rm -rf "$TMP_DIR"
