@@ -98,8 +98,8 @@ jobs:
       - name: Create self-extracting packages
         run: |
           cd makeself
-          ./makeself.sh x86/ clashoo_${VERSION}_x86_64.run "by github action" ./install.sh
-          ./makeself.sh arm64/ clashoo_${VERSION}_aarch64_a53.run "by github action" ./install.sh
+          ./makeself.sh x86/ 24.10-clashoo_${VERSION}_x86_64.run "by github action" ./install.sh
+          ./makeself.sh arm64/ 24.10-clashoo_${VERSION}_aarch64_a53.run "by github action" ./install.sh
 
       - name: Check file sizes
         run: |
