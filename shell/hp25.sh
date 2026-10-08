@@ -62,19 +62,31 @@ source_arch_for() {
 # 从 ImmortalWrt APK 索引下载指定的 pkg
 download_apk_from_immortalwrt() {
     source_arch="$1"
-    repo="$2"      # lucios 或 packages
+    repo="$2"      # luci 或 packages
     keyword="$3"   # 包名称前缀
     outdir="$4"
 
-    base_url="https://mirrors.pku.edu.cn/immortalwrt/releases/${OPENWRT_RELEASE}/packages/${source_arch}/${repo}"
     index_file="$WORK_ROOT/APKINDEX-${source_arch}-${repo}.tar.gz"
     extract_dir="$WORK_ROOT/index-${source_arch}-${repo}"
 
     mkdir -p "$extract_dir"
     log "正在获取 $repo 仓库的 APKINDEX..."
     
-    if ! download_file "${base_url}/APKINDEX.tar.gz" "$index_file"; then
-        die "无法从 $base_url 获取 APKINDEX.tar.gz"
+    # 依次尝试 PKU 镜像与官方源
+    download_success=0
+    for base_domain in \
+        "https://mirrors.pku.edu.cn/immortalwrt" \
+        "https://downloads.immortalwrt.org"
+    do
+        base_url="${base_domain}/snapshots/packages/${source_arch}/${repo}"
+        if download_file "${base_url}/APKINDEX.tar.gz" "$index_file"; then
+            download_success=1
+            break
+        fi
+    done
+
+    if [ "$download_success" -ne 1 ]; then
+        die "无法获取 ${source_arch}/${repo} 的 APKINDEX.tar.gz"
     fi
 
     tar -zxf "$index_file" -C "$extract_dir"
@@ -112,9 +124,9 @@ build_one() {
 
     log "开始下载 HomeProxy 依赖包: $label_arch ($source_arch)"
 
-    # 从 ImmortalWrt 官方 APK 源下载 HomeProxy 组件与核心 sing-box
-    download_apk_from_immortalwrt "$source_arch" "lucios"   "luci-app-homeproxy"        "$apk_dir"
-    download_apk_from_immortalwrt "$source_arch" "lucios"   "luci-i18n-homeproxy-zh-cn" "$apk_dir"
+    # 从 ImmortalWrt 官方/镜像 APK 源下载 HomeProxy 组件与核心 sing-box
+    download_apk_from_immortalwrt "$source_arch" "luci"     "luci-app-homeproxy"        "$apk_dir"
+    download_apk_from_immortalwrt "$source_arch" "luci"     "luci-i18n-homeproxy-zh-cn" "$apk_dir"
     download_apk_from_immortalwrt "$source_arch" "packages" "sing-box"                  "$apk_dir"
 
     hp_version=$(ls "$apk_dir"/luci-app-homeproxy-*.apk 2>/dev/null | head -n1 | sed -n 's/.*luci-app-homeproxy-\([0-9][0-9.]*\).*/\1/p' || echo "unknown")
