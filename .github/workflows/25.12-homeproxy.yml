@@ -16,7 +16,7 @@ jobs:
       - name: 📦 安装构建依赖工具
         run: |
           sudo apt-get update
-          sudo apt-get install -y makeself curl tar gawk zip unzip
+          sudo apt-get install -y makeself curl tar gawk zip unzip python3
 
       - name: 🚀 从 GitHub 拉取 HomeProxy 源码并打包
         run: |
@@ -132,43 +132,42 @@ jobs:
               exit 1
             fi
 
-            # 4. 生成兼容解压与依赖安装的脚本（使用 <<- 允许前导 Tab，或将结束词移至行首）
-            cat << 'EOF' > "${SAVE_DIR}/install.sh"
-            #!/bin/sh
+            # 4. 生成安装脚本 (改用安全的写入机制，避免 YAML 缩进干扰 EOF)
+            python3 -c "
+            script = '''#!/bin/sh
             set -e
             
-            echo "🚀 开始安装 HomeProxy 及其依赖..."
+            echo \"🚀 开始安装 HomeProxy 及其依赖...\"
             
-            # 1. 安装 sing-box 依赖（使用 apk 机制安装标准库）
             if ls sing-box-*.apk 1/dev/null 2>&1; then
-                echo "📦 正在安装 sing-box 依赖包..."
+                echo \"📦 正在安装 sing-box 依赖包...\"
                 apk add --allow-untrusted sing-box-*.apk || apk add sing-box-*.apk
             else
-                echo "⚠️ 未在本地找到 sing-box.apk，尝试从在线软件源安装..."
+                echo \"⚠️ 未在本地找到 sing-box.apk，尝试从在线软件源安装...\"
                 apk add sing-box || true
             fi
             
-            # 2. 解压部署 HomeProxy 系统文件到路由根目录
-            HP_TGZ=$(ls luci-app-homeproxy-*.tar.gz 2>/dev/null | head -n 1)
-            if [ -n "$HP_TGZ" ]; then
-                echo "📂 正在解压并部署 HomeProxy 文件到系统..."
-                tar -zxf "$HP_TGZ" -C /
+            HP_TGZ=\$(ls luci-app-homeproxy-*.tar.gz 2>/dev/null | head -n 1)
+            if [ -n \"\$HP_TGZ\" ]; then
+                echo \"📂 正在解压并部署 HomeProxy 文件到系统...\"
+                tar -zxf \"\$HP_TGZ\" -C /
                 
-                # 清理 LuCI 缓存
                 rm -rf /tmp/luci-indexcache /tmp/luci-modulecache/ 2>/dev/null || true
                 
-                # 尝试启动/重启 HomeProxy 服务
                 if [ -f /etc/init.d/homeproxy ]; then
                     chmod +x /etc/init.d/homeproxy
                     /etc/init.d/homeproxy enable 2>/dev/null || true
                 fi
             
-                echo "✅ HomeProxy 安装成功！请刷新 LuCI 控制台界面。"
+                echo \"✅ HomeProxy 安装成功！请刷新 LuCI 控制台界面。\"
             else
-                echo "❌ 错误：找不到 HomeProxy 资源文件！"
+                echo \"❌ 错误：找不到 HomeProxy 资源文件！\"
                 exit 1
             fi
-            EOF
+            '''
+            with open('${SAVE_DIR}/install.sh', 'w') as f:
+                f.write(script)
+            "
             chmod +x "${SAVE_DIR}/install.sh"
           done
 
