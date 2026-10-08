@@ -1,9 +1,7 @@
 #!/bin/sh
 set -eu
 
-SF_PROJECT="openwrt-passwall-build"
-SF_BASE="https://sourceforge.net/projects/$SF_PROJECT/files"
-OPENWRT_RELEASE="${OPENWRT_RELEASE:-25.12}"
+OPENWRT_RELEASE="${OPENWRT_RELEASE:-snapshots}"
 OUT_DIR="${OUT_DIR:-dist/homeproxy-run}"
 WORK_ROOT="${WORK_ROOT:-/tmp/homeproxy-run-build.$$}"
 DEFAULT_ARCHES="x86_64 aarch64_generic aarch64_a53"
@@ -32,7 +30,7 @@ usage() {
   sh hp25.sh --arch x86_64
 
 环境变量:
-  OPENWRT_RELEASE=25.12
+  OPENWRT_RELEASE=snapshots
   OUT_DIR=dist/homeproxy-run
 EOF
 }
@@ -51,16 +49,6 @@ download_file() {
     return 1
 }
 
-valid_pkg_file() {
-    file="$1"
-    [ -s "$file" ] || return 1
-    [ "$(wc -c < "$file")" -gt 1024 ] || return 1
-    if head -c 512 "$file" 2>/dev/null | tr 'A-Z' 'a-z' | grep -qE '<html|<!doctype|sourceforge'; then
-        return 1
-    fi
-    return 0
-}
-
 source_arch_for() {
     case "$1" in
         x86_64) printf '%s\n' "x86_64" ;;
@@ -71,52 +59,46 @@ source_arch_for() {
     esac
 }
 
-latest_sf_file() {
+# 从 ImmortalWrt APK 索引下载指定的 pkg
+download_apk_from_immortalwrt() {
     source_arch="$1"
-    repo="$2"
-    regex="$3"
-    tmp="$WORK_ROOT/sf-$source_arch-$repo.txt"
-    package_dir="releases/packages-$OPENWRT_RELEASE/$source_arch"
-    rss_url="https://sourceforge.net/projects/$SF_PROJECT/rss?path=/$package_dir/$repo"
-    folder_url="$SF_BASE/$package_dir/$repo/"
+    repo="$2"      # lucios 或 packages
+    keyword="$3"   # 包名称前缀
+    outdir="$4"
 
-    if download_file "$rss_url" "$tmp"; then
-        name="$(grep -oE '[A-Za-z0-9._+-]+\.apk' "$tmp" | grep -E "$regex" | head -n1 || true)"
-        [ -n "$name" ] && { printf '%s\n' "$name"; return 0; }
+    base_url="https://mirrors.pku.edu.cn/immortalwrt/releases/${OPENWRT_RELEASE}/packages/${source_arch}/${repo}"
+    index_file="$WORK_ROOT/APKINDEX-${source_arch}-${repo}.tar.gz"
+    extract_dir="$WORK_ROOT/index-${source_arch}-${repo}"
+
+    mkdir -p "$extract_dir"
+    log "正在获取 $repo 仓库的 APKINDEX..."
+    
+    if ! download_file "${base_url}/APKINDEX.tar.gz" "$index_file"; then
+        die "无法从 $base_url 获取 APKINDEX.tar.gz"
     fi
 
-    if download_file "$folder_url" "$tmp"; then
-        name="$(grep -oE '[A-Za-z0-9._+-]+\.apk' "$tmp" | grep -E "$regex" | head -n1 || true)"
-        [ -n "$name" ] && { printf '%s\n' "$name"; return 0; }
+    tar -zxf "$index_file" -C "$extract_dir"
+
+    # 在 APKINDEX 中查找精准包名
+    pkg_name=$(awk -v kw="$keyword" '
+        BEGIN { P=""; V="" }
+        /^P:/ { P=$2 }
+        /^V:/ { V=$2 }
+        /^$/ {
+            if (P == kw) {
+                print P "-" V ".apk"
+                exit
+            }
+            P=""; V=""
+        }
+    ' "$extract_dir/APKINDEX")
+
+    if [ -z "$pkg_name" ]; then
+        die "在 $repo 仓库中未能找到匹配包: $keyword"
     fi
-    return 1
-}
 
-download_sf_package() {
-    source_arch="$1"; repo="$2"; filename="$3"; outdir="$4"
-    package_dir="releases/packages-$OPENWRT_RELEASE/$source_arch"
-    output="$outdir/$filename"
-
-    for url in \
-        "https://master.dl.sourceforge.net/project/$SF_PROJECT/$package_dir/$repo/$filename" \
-        "https://downloads.sourceforge.net/project/$SF_PROJECT/$package_dir/$repo/$filename" \
-        "https://sourceforge.net/projects/$SF_PROJECT/files/$package_dir/$repo/$filename/download"
-    do
-        rm -f "$output"
-        if download_file "$url" "$output" && valid_pkg_file "$output"; then
-            return 0
-        fi
-        warn "下载失败，尝试下一个源: $filename"
-    done
-    return 1
-}
-
-download_target() {
-    title="$1"; source_arch="$2"; repo="$3"; regex="$4"; outdir="$5"
-    filename="$(latest_sf_file "$source_arch" "$repo" "$regex" || true)"
-    [ -n "$filename" ] || die "没有找到 $title"
-    log "下载: $filename"
-    download_sf_package "$source_arch" "$repo" "$filename" "$outdir" || die "下载失败: $filename"
+    log "找到并下载: $pkg_name"
+    download_file "${base_url}/${pkg_name}" "${outdir}/${pkg_name}" || die "下载失败: $pkg_name"
 }
 
 build_one() {
@@ -130,10 +112,10 @@ build_one() {
 
     log "开始下载 HomeProxy 依赖包: $label_arch ($source_arch)"
 
-    # 从 25.12 对应的 apk 仓库中拉取 HomeProxy 及核心依赖 sing-box
-    download_target "luci-app-homeproxy"        "$source_arch" "passwall_luci"     '^luci-app-homeproxy-[0-9].*\.apk$'        "$apk_dir"
-    download_target "luci-i18n-homeproxy-zh-cn" "$source_arch" "passwall_luci"     '^luci-i18n-homeproxy-zh-cn-[0-9].*\.apk$' "$apk_dir"
-    download_target "sing-box"                  "$source_arch" "passwall_packages" '^sing-box-[0-9].*\.apk$'                  "$apk_dir"
+    # 从 ImmortalWrt 官方 APK 源下载 HomeProxy 组件与核心 sing-box
+    download_apk_from_immortalwrt "$source_arch" "lucios"   "luci-app-homeproxy"        "$apk_dir"
+    download_apk_from_immortalwrt "$source_arch" "lucios"   "luci-i18n-homeproxy-zh-cn" "$apk_dir"
+    download_apk_from_immortalwrt "$source_arch" "packages" "sing-box"                  "$apk_dir"
 
     hp_version=$(ls "$apk_dir"/luci-app-homeproxy-*.apk 2>/dev/null | head -n1 | sed -n 's/.*luci-app-homeproxy-\([0-9][0-9.]*\).*/\1/p' || echo "unknown")
 
@@ -143,7 +125,7 @@ build_one() {
 set -e
 apk update
 apk add --allow-untrusted *.apk
-echo "HomeProxy 25.12 安装完成！"
+echo "HomeProxy 安装完成！"
 EOF
     chmod +x "$apk_dir/install.sh"
 
@@ -162,7 +144,7 @@ EOF
 }
 
 main() {
-    need_cmd grep sed awk basename ls
+    need_cmd grep sed awk basename ls tar
 
     mkdir -p "$WORK_ROOT"
     trap 'rm -rf "$WORK_ROOT" 2>/dev/null || true' EXIT INT TERM
