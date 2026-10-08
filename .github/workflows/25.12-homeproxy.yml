@@ -11,20 +11,20 @@ jobs:
 
     steps:
       - name: 📥 Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: 📦 安装构建依赖工具
-        run: sudo apt-get update && sudo apt-get install -y makeself curl tar awk
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y makeself curl tar gawk
 
       - name: 🚀 检索并下载 25.12 APK 依赖包
         run: |
-          # 镜像源优先列表
           MIRRORS=(
             "https://downloads.immortalwrt.org/snapshots/packages"
             "https://mirrors.pku.edu.cn/immortalwrt/snapshots/packages"
           )
 
-          # 架构列表
           declare -A PLATFORMS=(
             ["x86_64"]="x86_64"
             ["aarch64_generic"]="aarch64_generic"
@@ -35,55 +35,61 @@ jobs:
           COMMON_TMP="${TMP_DIR}/common_apks"
           mkdir -p "$COMMON_TMP"
 
-          # 通用 APK 下载函数
           download_apk_multisource() {
-            subpath="$1"
+            subpaths=("$1")
             keyword="$2"
             save_dir="$3"
+            
+            # 如果没传备用路径，自动添加补全
+            if [ "$1" = "luci" ]; then
+              subpaths=("luci" "all/luci" "x86_64/luci")
+            elif [ "$1" = "packages" ]; then
+              subpaths=("packages" "x86_64/packages")
+            fi
+
             success=0
 
-            for base_url in "${MIRRORS[@]}"; do
-              repo_url="${base_url}/${subpath}"
-              hash_id=$(echo "$repo_url" | md5sum | awk '{print $1}')
-              index_tar="${TMP_DIR}/APKINDEX_${hash_id}.tar.gz"
-              extract_dir="${TMP_DIR}/ext_${hash_id}"
-              mkdir -p "$extract_dir"
+            for subpath in "${subpaths[@]}"; do
+              for base_url in "${MIRRORS[@]}"; do
+                repo_url="${base_url}/${subpath}"
+                hash_id=$(echo "$repo_url" | md5sum | awk '{print $1}')
+                index_tar="${TMP_DIR}/APKINDEX_${hash_id}.tar.gz"
+                extract_dir="${TMP_DIR}/ext_${hash_id}"
+                mkdir -p "$extract_dir"
 
-              echo "🔍 尝试从 ${repo_url} 查找 $keyword ..."
+                echo "🔍 正在从 ${repo_url} 查找 $keyword ..."
 
-              if curl -fsL --connect-timeout 10 --retry 2 "${repo_url}/APKINDEX.tar.gz" -o "$index_tar"; then
-                if tar -zxf "$index_tar" -C "$extract_dir" 2>/dev/null; then
-                  # 正确解析 APKINDEX 记录块
-                  FILE=$(tr -d '\r' < "$extract_dir/APKINDEX" | awk -v kw="$keyword" '
-                    BEGIN { RS=""; FS="\n" }
-                    {
-                      pkg=""; ver=""
-                      for(i=1;i<=NF;i++) {
-                        if($i ~ /^P:/) pkg=substr($i,3)
-                        if($i ~ /^V:/) ver=substr($i,3)
+                if curl -fsL --connect-timeout 8 --retry 2 "${repo_url}/APKINDEX.tar.gz" -o "$index_tar" 2>/dev/null; then
+                  if tar -zxf "$index_tar" -C "$extract_dir" 2>/dev/null; then
+                    FILE=$(tr -d '\r' < "$extract_dir/APKINDEX" | awk -v kw="$keyword" '
+                      BEGIN { RS=""; FS="\n" }
+                      {
+                        pkg=""; ver=""
+                        for(i=1;i<=NF;i++) {
+                          if($i ~ /^P:/) pkg=substr($i,3)
+                          if($i ~ /^V:/) ver=substr($i,3)
+                        }
+                        if(pkg == kw && ver != "") {
+                          print pkg "-" ver ".apk"
+                          exit
+                        }
                       }
-                      if(pkg == kw && ver != "") {
-                        print pkg "-" ver ".apk"
-                        exit
-                      }
-                    }
-                  ')
+                    ')
 
-                  if [ -n "$FILE" ]; then
-                    echo "⬇️ 正在下载: $FILE"
-                    if curl -fsL --connect-timeout 15 "${repo_url}/${FILE}" -o "${save_dir}/${FILE}"; then
-                      if [[ "$FILE" == *"~"* ]]; then
-                        NEW_FILE=$(echo "$FILE" | tr '~' '-')
-                        mv "${save_dir}/${FILE}" "${save_dir}/${NEW_FILE}"
-                        echo "🔧 已重命名为: $NEW_FILE"
+                    if [ -n "$FILE" ]; then
+                      echo "⬇️ 找到匹配，正在下载: $FILE"
+                      if curl -fsL --connect-timeout 15 "${repo_url}/${FILE}" -o "${save_dir}/${FILE}"; then
+                        if [[ "$FILE" == *"~"* ]]; then
+                          NEW_FILE=$(echo "$FILE" | tr '~' '-')
+                          mv "${save_dir}/${FILE}" "${save_dir}/${NEW_FILE}"
+                        fi
+                        success=1
+                        break 2
                       fi
-                      success=1
-                      break
                     fi
                   fi
                 fi
-              fi
-              echo "⚠️ 源 ${repo_url} 查找失败，尝试下一个源..."
+              done
             done
 
             if [ $success -eq 1 ]; then
@@ -94,12 +100,11 @@ jobs:
             fi
           }
 
-          echo "📦 [1/2] 正在下载 luci-app-homeproxy 及语言包..."
-          # 修正 25.12 界面包路径为 luci
+          echo "📦 [1/2] 下载 luci-app-homeproxy 及语言包..."
           download_apk_multisource "luci" "luci-app-homeproxy" "$COMMON_TMP"
           download_apk_multisource "luci" "luci-i18n-homeproxy-zh-cn" "$COMMON_TMP"
 
-          echo "📦 [2/2] 正在分平台下载 sing-box 并构建安装包目录..."
+          echo "📦 [2/2] 分平台下载 sing-box 并构建安装包目录..."
           for platform in "${!PLATFORMS[@]}"; do
             arch_path="${PLATFORMS[$platform]}"
             SAVE_DIR="$(pwd)/${platform}"
@@ -108,23 +113,23 @@ jobs:
             # 复制通用界面包
             cp -f "$COMMON_TMP"/*.apk "$SAVE_DIR/"
 
-            # 动态生成适用于 25.12 apk 的 install.sh
+            # 自动生成适应 25.12 apk 的 install.sh
             cat << 'EOF' > "${SAVE_DIR}/install.sh"
-          #!/bin/sh
-          set -e
-          echo "🚀 开始安装 HomeProxy (APK 格式)..."
-          apk update || true
-          apk add --allow-untrusted *.apk
-          echo "✅ HomeProxy 安装成功！"
-          EOF
+#!/bin/sh
+set -e
+echo "🚀 开始安装 HomeProxy (APK 格式)..."
+apk update || true
+apk add --allow-untrusted *.apk
+echo "✅ HomeProxy 安装成功！"
+EOF
             chmod +x "${SAVE_DIR}/install.sh"
 
-            # 下载该平台专属 sing-box 二进制包
+            # 下载对应架构的 sing-box
             download_apk_multisource "${arch_path}/packages" "sing-box" "$SAVE_DIR"
           done
 
           rm -rf "$TMP_DIR"
-          echo "✅ 所有架构依赖包获取完成！"
+          echo "✅ 所有平台依赖获取完毕！"
 
       - name: 🔍 提取版本号并打包
         id: pack
@@ -141,7 +146,7 @@ jobs:
           done
 
           if [ -z "$APP_APK" ]; then
-            echo "❌ 未找到下载的 apk 文件，请检查下载日志！"
+            echo "❌ 未找到下载的 apk 文件，请检查上一步下载日志！"
             ls -R
             exit 1
           fi
@@ -154,9 +159,8 @@ jobs:
           fi
 
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "提取到的 HomeProxy 版本号: $VERSION"
+          echo "提取到的版本号: $VERSION"
 
-          # 使用 makeself 制作全自动运行打包
           for PLATFORM in x86_64 aarch64_generic aarch64_cortex-a53; do
             makeself "$PLATFORM" "output/25.12-homeproxy-${PLATFORM}-${VERSION}.run" \
               "homeproxy ${PLATFORM} Installer v${VERSION}" ./install.sh
