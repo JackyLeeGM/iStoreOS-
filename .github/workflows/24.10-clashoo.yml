@@ -17,6 +17,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout repository
@@ -28,7 +30,7 @@ jobs:
       - name: Fetch latest prerelease info
         id: fetch_release
         run: |
-          curl -s https://api.github.com/repos/kenzok8/openwrt-clashoo/releases \
+          curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/kenzok8/openwrt-clashoo/releases \
             | jq 'map(select(.prerelease==false)) | sort_by(.published_at) | last' \
             > release.json
 
@@ -103,13 +105,13 @@ jobs:
 
       - name: Check file sizes
         run: |
-          ls -lh makeself/clashoo_*.run
+          # 统一改为通配检查 makeself 下的所有 .run 文件
+          ls -lh makeself/*.run
 
       - name: Preparing release name
         run: |
           release_name=$(TZ="Asia/Shanghai" date +'%Y-%m-%d %H:%M Build')
           echo "RELEASE_NAME=$release_name" >> $GITHUB_ENV
-
 
       - name: Set tag name
         id: vars
