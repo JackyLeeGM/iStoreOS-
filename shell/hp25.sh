@@ -1,21 +1,13 @@
 #!/bin/bash
 set -e
 
-# 1. 定义 25.12 (snapshots) 的 APK 源基准地址
 BASE_MIRROR="https://mirrors.pku.edu.cn/immortalwrt/snapshots/packages"
 
-# 平台架构列表
+# 平台架构列表（用于 sing-box 等二进制编译包）
 declare -A PLATFORMS=(
   ["x86_64"]="${BASE_MIRROR}/x86_64"
   ["aarch64_generic"]="${BASE_MIRROR}/aarch64_generic"
   ["aarch64_cortex-a53"]="${BASE_MIRROR}/aarch64_cortex-a53"
-)
-
-# 各类包对应的子仓库 (luci / packages)
-declare -A PACKAGE_SOURCES=(
-  ["luci-app-homeproxy"]="luci"
-  ["luci-i18n-homeproxy-zh-cn"]="luci"
-  ["sing-box"]="packages"
 )
 
 OUT_DIR=$(pwd)
@@ -26,60 +18,77 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# 从指定的 APK 仓库索引中查找并下载包
+download_apk() {
+  repo_url="$1"
+  keyword="$2"
+  save_dir="$3"
+  
+  index_tar="${TMP_DIR}/APKINDEX_$(echo "$repo_url" | md5sum | awk '{print $1}').tar.gz"
+  extract_dir="${TMP_DIR}/ext_$(echo "$repo_url" | md5sum | awk '{print $1}')"
+  mkdir -p "$extract_dir"
+
+  echo "🔍 正在从 ${repo_url} 查找 $keyword ..."
+
+  if ! curl -fsL "${repo_url}/APKINDEX.tar.gz" -o "$index_tar"; then
+    echo "⚠️ 无法获取 ${repo_url}/APKINDEX.tar.gz"
+    return 1
+  fi
+
+  tar -zxf "$index_tar" -C "$extract_dir"
+
+  # 解析 APKINDEX 获取精准文件名 (P:包名 \n V:版本)
+  FILE=$(awk -v kw="$keyword" '
+    BEGIN { P=""; V="" }
+    /^P:/ { P=$2 }
+    /^V:/ { V=$2 }
+    /^$/ {
+      if (P == kw) {
+        print P "-" V ".apk"
+        exit
+      }
+      P=""; V=""
+    }
+  ' "$extract_dir/APKINDEX")
+
+  if [ -n "$FILE" ]; then
+    echo "⬇️ 正在下载: $FILE"
+    if curl -fsL -o "${save_dir}/${FILE}" "${repo_url}/${FILE}"; then
+      if [[ "$FILE" == *"~"* ]]; then
+        NEW_FILE=$(echo "$FILE" | tr '~' '-')
+        mv "${save_dir}/${FILE}" "${save_dir}/${NEW_FILE}"
+        echo "🔧 已重命名为: $NEW_FILE"
+      fi
+      return 0
+    fi
+  fi
+
+  echo "❌ 未找到或下载失败: $keyword"
+  return 1
+}
+
+# 1. 优先下载通用的 Luci 界面与语言包 (来自 all/luci 仓库)
+ALL_LUCI_URL="${BASE_MIRROR}/all/luci"
+COMMON_TMP="${TMP_DIR}/common_apks"
+mkdir -p "$COMMON_TMP"
+
+echo "📦 正在下载通用界面组件 (luci-app-homeproxy)..."
+download_apk "$ALL_LUCI_URL" "luci-app-homeproxy" "$COMMON_TMP"
+download_apk "$ALL_LUCI_URL" "luci-i18n-homeproxy-zh-cn" "$COMMON_TMP"
+
+# 2. 为各个平台单独处理特定架构依赖 (如 sing-box) 并合成完整目录
 for platform in "${!PLATFORMS[@]}"; do
-  BASE_URL="${PLATFORMS[$platform]}"
+  PLATFORM_URL="${PLATFORMS[$platform]}"
   SAVE_DIR="${OUT_DIR}/${platform}"
   mkdir -p "$SAVE_DIR"
 
-  echo "📦 正在处理平台: $platform"
+  echo "📦 正在处理平台专属依赖: $platform"
 
-  for keyword in "${!PACKAGE_SOURCES[@]}"; do
-    subdir="${PACKAGE_SOURCES[$keyword]}"
-    URL="${BASE_URL}/${subdir}"
-    INDEX_TAR="${TMP_DIR}/${platform}_${subdir}_APKINDEX.tar.gz"
-    EXTRACT_DIR="${TMP_DIR}/${platform}_${subdir}_index"
-    mkdir -p "$EXTRACT_DIR"
+  # 复制通用界面包到平台目录
+  cp -f "$COMMON_TMP"/*.apk "$SAVE_DIR/" 2>/dev/null || true
 
-    echo "🔍 从 APKINDEX.tar.gz 查找 $keyword"
-
-    # 下载并解压 25.12 的 APKINDEX.tar.gz
-    if ! curl -fsL "${URL}/APKINDEX.tar.gz" -o "$INDEX_TAR"; then
-      echo "⚠️ 无法获取 ${URL}/APKINDEX.tar.gz"
-      continue
-    fi
-
-    tar -zxf "$INDEX_TAR" -C "$EXTRACT_DIR"
-
-    # 从 APKINDEX 文本文件中查找精准包名 (格式为 P:包名 \n V:版本号)
-    FILE=$(awk -v kw="$keyword" '
-      BEGIN { P=""; V="" }
-      /^P:/ { P=$2 }
-      /^V:/ { V=$2 }
-      /^$/ {
-        if (P == kw) {
-          print P "-" V ".apk"
-          exit
-        }
-        P=""; V=""
-      }
-    ' "$EXTRACT_DIR/APKINDEX")
-
-    if [ -n "$FILE" ]; then
-      echo "⬇️ 正在下载: $FILE"
-      if curl -fsL -o "${SAVE_DIR}/${FILE}" "${URL}/${FILE}"; then
-        # 🚧 兼容文件名中波浪号 ~ 处理
-        if [[ "$FILE" == *"~"* ]]; then
-          NEW_FILE=$(echo "$FILE" | tr '~' '-')
-          mv "${SAVE_DIR}/${FILE}" "${SAVE_DIR}/${NEW_FILE}"
-          echo "🔧 已重命名为: $NEW_FILE"
-        fi
-      else
-        echo "❌ 下载失败: ${FILE}"
-      fi
-    else
-      echo "❌ 未找到匹配包: $keyword"
-    fi
-  done
+  # 从当前架构的 packages 目录下载 sing-box
+  download_apk "${PLATFORM_URL}/packages" "sing-box" "$SAVE_DIR" || true
 done
 
-echo "✅ 下载完成，文件已分别存入 x86_64、aarch64_generic、aarch64_cortex-a53 目录中。"
+echo "✅ 下载完成，文件已正确保存至各架构目录！"
