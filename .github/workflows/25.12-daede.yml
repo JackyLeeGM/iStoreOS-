@@ -64,9 +64,9 @@ jobs:
       - name: Create self-extracting packages
         run: |
           cd makeself
-          ./makeself.sh x86/ 25.12-openwrt-daede-${VERSION}-x86_64.run "by github action" ./install.sh
-          ./makeself.sh arm64/ 25.12-openwrt-daede-${VERSION}-aarch64_generic.run "by github action" ./install.sh
-          ./makeself.sh arm64-a53/ 25.12-openwrt-daede-${VERSION}-aarch64_cortex-a53.run "by github action" ./install.sh
+          ./makeself.sh x86/ 25.12-Openwrt-Daede-${VERSION}-x86_64.run "by github action" ./install.sh
+          ./makeself.sh arm64/ 25.12-Openwrt-Daede-${VERSION}-aarch64_generic.run "by github action" ./install.sh
+          ./makeself.sh arm64-a53/ 25.12-Openwrt-Daede-${VERSION}-aarch64_cortex-a53.run "by github action" ./install.sh
 
       - name: Check file sizes
         run: |
