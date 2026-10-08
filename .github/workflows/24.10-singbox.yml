@@ -17,16 +17,17 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
-      
 
       - name: Fetch latest release tag from sing-box Core
         id: fetch_latest_tag
         run: |
-          latest_tag=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases \
+          latest_tag=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/SagerNet/sing-box/releases \
           | jq -r 'sort_by(.published_at) | reverse | map(select(.prerelease==false)) | .[0].tag_name')
           echo "LATEST_TAG=$latest_tag" >> $GITHUB_ENV
           echo "最新版本:$latest_tag"
@@ -45,8 +46,6 @@ jobs:
           # arm64
           wget -O arm64/sing-box_${VERSION}_openwrt_aarch64_generic.ipk \
             https://github.com/SagerNet/sing-box/releases/download/${LATEST_TAG}/sing-box_${VERSION}_openwrt_aarch64_generic.ipk
-
-
 
       - name: Create install.sh scripts
         run: |
@@ -76,13 +75,13 @@ jobs:
 
       - name: Check file sizes
         run: |
-          ls -lh makeself/sing-box_*.run
+          # 修正处的匹配规则：检查 makeself 目录下所有 .run 文件
+          ls -lh makeself/*.run
 
       - name: Preparing release name
         run: |
           release_name=$(TZ="Asia/Shanghai" date +'%Y-%m-%d %H:%M Build')
           echo "RELEASE_NAME=$release_name" >> $GITHUB_ENV
-
 
       - name: Set tag name
         id: vars
