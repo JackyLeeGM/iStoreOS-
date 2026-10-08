@@ -33,13 +33,24 @@ jobs:
         run: |
           mkdir -p output
 
-          # 获取 APK 版本号
-          APP_APK=$(ls aarch64_generic/luci-app-homeproxy-*.apk 2>/dev/null | head -n 1 || true)
+          # 依次在各平台目录下查找 luci-app-homeproxy 包
+          APP_APK=""
+          for PLAT in x86_64 aarch64_generic aarch64_cortex-a53; do
+            MATCH=$(ls ${PLAT}/luci-app-homeproxy-*.apk 2>/dev/null | head -n 1 || true)
+            if [ -n "$MATCH" ]; then
+              APP_APK="$MATCH"
+              break
+            fi
+          done
+
           if [ -z "$APP_APK" ]; then
-            echo "❌ 未找到下载的 apk 文件"
+            echo "❌ 未找到下载的 apk 文件，请检查下载日志！"
+            echo "📂 当前目录文件结构如下："
+            ls -R
             exit 1
           fi
 
+          # 提取版本号
           VERSION=$(basename "$APP_APK" | sed -n 's/^luci-app-homeproxy-\(.*\)\.apk$/\1/p')
 
           if [ -z "$VERSION" ]; then
