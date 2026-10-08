@@ -45,7 +45,7 @@ jobs:
           COMMON_TMP="${TMP_DIR}/common_apks"
           mkdir -p "$COMMON_TMP"
 
-          # 2. 将 HomeProxy 文件直接打成标准归档包（避开 apk 校验机制）
+          # 2. 将 HomeProxy 文件打包
           OUT_TGZ="${COMMON_TMP}/luci-app-homeproxy-${VERSION}.tar.gz"
           (cd "$PKG_BUILD" && tar -czf "$OUT_TGZ" .)
 
@@ -132,38 +132,45 @@ jobs:
               exit 1
             fi
 
-            # 4. 生成安装脚本 (改用 printf 安全写入，避免 Heredoc 缩进与 EOF 匹配问题)
+            # 4. 生成脚本（修复语法并补全 LuCI 注册机制）
             printf '%s\n' \
               '#!/bin/sh' \
               'set -e' \
               '' \
               'echo "🚀 开始安装 HomeProxy 及其依赖..."' \
               '' \
-              '# 1. 安装 sing-box 依赖（使用 apk 机制安装标准库）' \
-              'if ls sing-box-*.apk 1/dev/null 2>&1; then' \
-              '    echo "📦 正在安装 sing-box 依赖包..."' \
-              '    apk add --allow-untrusted sing-box-*.apk || apk add sing-box-*.apk' \
+              '# 1. 安装 sing-box 依赖' \
+              'SINGBOX_FILE=$(ls sing-box-*.apk 2>/dev/null | head -n 1 || true)' \
+              'if [ -n "$SINGBOX_FILE" ]; then' \
+              '    echo "📦 正在安装本地依赖包: $SINGBOX_FILE"' \
+              '    apk add --allow-untrusted "$SINGBOX_FILE" || apk add "$SINGBOX_FILE"' \
               'else' \
-              '    echo "⚠️ 未在本地找到 sing-box.apk，尝试从在线软件源安装..."' \
+              '    echo "⚠️ 未在本地找到 sing-box.apk，尝试在线安装..."' \
               '    apk add sing-box || true' \
               'fi' \
               '' \
-              '# 2. 解压部署 HomeProxy 系统文件到路由根目录' \
+              '# 2. 解压部署 HomeProxy 系统文件' \
               'HP_TGZ=$(ls luci-app-homeproxy-*.tar.gz 2>/dev/null | head -n 1)' \
               'if [ -n "$HP_TGZ" ]; then' \
               '    echo "📂 正在解压并部署 HomeProxy 文件到系统..."' \
               '    tar -zxf "$HP_TGZ" -C /' \
               '    ' \
-              '    # 清理 LuCI 缓存' \
-              '    rm -rf /tmp/luci-indexcache /tmp/luci-modulecache/ 2>/dev/null || true' \
+              '    # 修复 ACL 权限文件以在后台正常显示菜单' \
+              '    mkdir -p /usr/share/luci/acl.d/' \
+              '    cat << "ACL_EOF" > /usr/share/luci/acl.d/luci-app-homeproxy.json' \
+              '{"luci-app-homeproxy":{"description":"Grant access to HomeProxy","read":{"ubus":{"homeproxy":["*"]},"uci":["homeproxy"]},"write":{"uci":["homeproxy"]}}}' \
+              'ACL_EOF' \
               '    ' \
-              '    # 尝试启动/重启 HomeProxy 服务' \
+              '    # 清理 LuCI 界面缓存并重载服务' \
+              '    rm -rf /tmp/luci-indexcache /tmp/luci-modulecache/ /tmp/luci-sessions/ 2>/dev/null || true' \
+              '    /etc/init.d/rpcd restart 2>/dev/null || true' \
+              '    ' \
               '    if [ -f /etc/init.d/homeproxy ]; then' \
               '        chmod +x /etc/init.d/homeproxy' \
               '        /etc/init.d/homeproxy enable 2>/dev/null || true' \
               '    fi' \
               '' \
-              '    echo "✅ HomeProxy 安装成功！请刷新 LuCI 控制台界面。"' \
+              '    echo "✅ HomeProxy 安装成功！请刷新后台网页登录。"' \
               'else' \
               '    echo "❌ 错误：找不到 HomeProxy 资源文件！"' \
               '    exit 1' \
