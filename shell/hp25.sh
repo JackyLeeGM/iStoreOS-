@@ -1,13 +1,16 @@
 #!/bin/bash
-set -e
 
-BASE_MIRROR="https://mirrors.pku.edu.cn/immortalwrt/snapshots/packages"
+# 镜像源列表 (官方源备用，防止镜像站路径缺失或同步延迟)
+MIRRORS=(
+  "https://downloads.immortalwrt.org/snapshots/packages"
+  "https://mirrors.pku.edu.cn/immortalwrt/snapshots/packages"
+)
 
 # 平台架构列表（用于 sing-box 等二进制编译包）
 declare -A PLATFORMS=(
-  ["x86_64"]="${BASE_MIRROR}/x86_64"
-  ["aarch64_generic"]="${BASE_MIRROR}/aarch64_generic"
-  ["aarch64_cortex-a53"]="${BASE_MIRROR}/aarch64_cortex-a53"
+  ["x86_64"]="x86_64"
+  ["aarch64_generic"]="aarch64_generic"
+  ["aarch64_cortex-a53"]="aarch64_cortex-a53"
 )
 
 OUT_DIR=$(pwd)
@@ -18,67 +21,73 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# 从指定的 APK 仓库索引中查找并下载包
-download_apk() {
-  repo_url="$1"
-  keyword="$2"
-  save_dir="$3"
-  
-  index_tar="${TMP_DIR}/APKINDEX_$(echo "$repo_url" | md5sum | awk '{print $1}').tar.gz"
-  extract_dir="${TMP_DIR}/ext_$(echo "$repo_url" | md5sum | awk '{print $1}')"
-  mkdir -p "$extract_dir"
+# 尝试从多个源下载包
+download_apk_multisource() {
+  subpath="$1"   # 例如: all/luci 或 x86_64/packages
+  keyword="$2"   # 例如: luci-app-homeproxy
+  save_dir="$3"  # 目标保存目录
 
-  echo "🔍 正在从 ${repo_url} 查找 $keyword ..."
+  success=0
 
-  if ! curl -fsL "${repo_url}/APKINDEX.tar.gz" -o "$index_tar"; then
-    echo "⚠️ 无法获取 ${repo_url}/APKINDEX.tar.gz"
+  for base_url in "${MIRRORS[@]}"; do
+    repo_url="${base_url}/${subpath}"
+    hash_id=$(echo "$repo_url" | md5sum | awk '{print $1}')
+    index_tar="${TMP_DIR}/APKINDEX_${hash_id}.tar.gz"
+    extract_dir="${TMP_DIR}/ext_${hash_id}"
+    mkdir -p "$extract_dir"
+
+    echo "🔍 尝试从 ${repo_url} 查找 $keyword ..."
+
+    if curl -fsL --connect-timeout 10 --retry 2 "${repo_url}/APKINDEX.tar.gz" -o "$index_tar"; then
+      if tar -zxf "$index_tar" -C "$extract_dir" 2>/dev/null; then
+        FILE=$(awk -v kw="$keyword" '
+          BEGIN { P=""; V="" }
+          /^P:/ { P=$2 }
+          /^V:/ { V=$2 }
+          /^$/ {
+            if (P == kw) {
+              print P "-" V ".apk"
+              exit
+            }
+            P=""; V=""
+          }
+        ' "$extract_dir/APKINDEX")
+
+        if [ -n "$FILE" ]; then
+          echo "⬇️ 正在下载: $FILE"
+          if curl -fsL --connect-timeout 15 "${repo_url}/${FILE}" -o "${save_dir}/${FILE}"; then
+            if [[ "$FILE" == *"~"* ]]; then
+              NEW_FILE=$(echo "$FILE" | tr '~' '-')
+              mv "${save_dir}/${FILE}" "${save_dir}/${NEW_FILE}"
+              echo "🔧 已重命名为: $NEW_FILE"
+            fi
+            success=1
+            break
+          fi
+        fi
+      fi
+    fi
+    echo "⚠️ 源 ${repo_url} 无法找到或下载失败，尝试下一个源..."
+  done
+
+  if [ $success -eq 1 ]; then
+    return 0
+  else
+    echo "❌ 无法找到或下载: $keyword"
     return 1
   fi
-
-  tar -zxf "$index_tar" -C "$extract_dir"
-
-  # 解析 APKINDEX 获取精准文件名 (P:包名 \n V:版本)
-  FILE=$(awk -v kw="$keyword" '
-    BEGIN { P=""; V="" }
-    /^P:/ { P=$2 }
-    /^V:/ { V=$2 }
-    /^$/ {
-      if (P == kw) {
-        print P "-" V ".apk"
-        exit
-      }
-      P=""; V=""
-    }
-  ' "$extract_dir/APKINDEX")
-
-  if [ -n "$FILE" ]; then
-    echo "⬇️ 正在下载: $FILE"
-    if curl -fsL -o "${save_dir}/${FILE}" "${repo_url}/${FILE}"; then
-      if [[ "$FILE" == *"~"* ]]; then
-        NEW_FILE=$(echo "$FILE" | tr '~' '-')
-        mv "${save_dir}/${FILE}" "${save_dir}/${NEW_FILE}"
-        echo "🔧 已重命名为: $NEW_FILE"
-      fi
-      return 0
-    fi
-  fi
-
-  echo "❌ 未找到或下载失败: $keyword"
-  return 1
 }
 
-# 1. 优先下载通用的 Luci 界面与语言包 (来自 all/luci 仓库)
-ALL_LUCI_URL="${BASE_MIRROR}/all/luci"
 COMMON_TMP="${TMP_DIR}/common_apks"
 mkdir -p "$COMMON_TMP"
 
 echo "📦 正在下载通用界面组件 (luci-app-homeproxy)..."
-download_apk "$ALL_LUCI_URL" "luci-app-homeproxy" "$COMMON_TMP"
-download_apk "$ALL_LUCI_URL" "luci-i18n-homeproxy-zh-cn" "$COMMON_TMP"
+download_apk_multisource "all/luci" "luci-app-homeproxy" "$COMMON_TMP" || true
+download_apk_multisource "all/luci" "luci-i18n-homeproxy-zh-cn" "$COMMON_TMP" || true
 
-# 2. 为各个平台单独处理特定架构依赖 (如 sing-box) 并合成完整目录
+# 2. 处理特定架构依赖 (如 sing-box)
 for platform in "${!PLATFORMS[@]}"; do
-  PLATFORM_URL="${PLATFORMS[$platform]}"
+  arch_path="${PLATFORMS[$platform]}"
   SAVE_DIR="${OUT_DIR}/${platform}"
   mkdir -p "$SAVE_DIR"
 
@@ -87,8 +96,8 @@ for platform in "${!PLATFORMS[@]}"; do
   # 复制通用界面包到平台目录
   cp -f "$COMMON_TMP"/*.apk "$SAVE_DIR/" 2>/dev/null || true
 
-  # 从当前架构的 packages 目录下载 sing-box
-  download_apk "${PLATFORM_URL}/packages" "sing-box" "$SAVE_DIR" || true
+  # 下载当前架构的 sing-box
+  download_apk_multisource "${arch_path}/packages" "sing-box" "$SAVE_DIR" || true
 done
 
-echo "✅ 下载完成，文件已正确保存至各架构目录！"
+echo "✅ 依赖检索完成，文件已保存至各架构目录！"
