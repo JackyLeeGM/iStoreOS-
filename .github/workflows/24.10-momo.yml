@@ -94,8 +94,8 @@ jobs:
       - name: Create self-extracting packages
         run: |
           cd makeself
-          ./makeself.sh momo_x86_64/ momo_${{ env.LATEST_TAG }}_x86_64.run "by github action" ./install.sh
-          ./makeself.sh momo_aarch64_cortex-a53/ momo_${{ env.LATEST_TAG }}_aarch64_cortex-a53.run "by github action" ./install.sh
+          ./makeself.sh momo_x86_64/ 24.10-momo_${{ env.LATEST_TAG }}_x86_64.run "by github action" ./install.sh
+          ./makeself.sh momo_aarch64_cortex-a53/ 24.10-momo_${{ env.LATEST_TAG }}_aarch64_cortex-a53.run "by github action" ./install.sh
           
       - name: Check file sizes
         run: |
