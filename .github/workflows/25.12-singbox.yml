@@ -78,9 +78,9 @@ jobs:
       - name: Create self-extracting packages
         run: |
           cd makeself
-          ./makeself.sh x86/ 25-sing-box_${LATEST_TAG}_x86_64.run "by github action" ./install.sh
-          ./makeself.sh arm64/ 25-sing-box_${LATEST_TAG}_aarch64_generic.run "by github action" ./install.sh
-          ./makeself.sh aarch64_cortex-a53/ 25-sing-box_${LATEST_TAG}_aarch64_cortex-a53.run "by github action" ./install.sh
+          ./makeself.sh x86/ 25.12-sing-box_${LATEST_TAG}_x86_64.run "by github action" ./install.sh
+          ./makeself.sh arm64/ 25.12-sing-box_${LATEST_TAG}_aarch64_generic.run "by github action" ./install.sh
+          ./makeself.sh aarch64_cortex-a53/ 25.12-sing-box_${LATEST_TAG}_aarch64_cortex-a53.run "by github action" ./install.sh
 
       - name: Check file sizes
         run: |
