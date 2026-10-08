@@ -98,8 +98,8 @@ jobs:
       - name: Create self-extracting packages
         run: |
           cd makeself
-          ./makeself.sh passwall_x86_64/ passwall2_x86_64_${{ env.LATEST_TAG }}.run "by github action" ./install.sh
-          ./makeself.sh passwall_aarch64/ passwall2_aarch64_a53_${{ env.LATEST_TAG }}.run "by github action" ./install.sh
+          ./makeself.sh passwall_x86_64/ 24.10-passwall2_x86_64_${{ env.LATEST_TAG }}.run "by github action" ./install.sh
+          ./makeself.sh passwall_aarch64/ 24.10-passwall2_aarch64_a53_${{ env.LATEST_TAG }}.run "by github action" ./install.sh
 
       - name: Check file sizes
         run: |
