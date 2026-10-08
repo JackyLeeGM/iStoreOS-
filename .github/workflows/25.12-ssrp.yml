@@ -129,7 +129,7 @@ jobs:
 
       - name: Build run
         run: |
-          makeself --quiet work makeself/25-SSRP-mihomo-${{ matrix.arch }}-${{ env.PACKAGE_VERSION }}.run "SSRP" ./install.sh
+          makeself --quiet work makeself/25.12-SSRP-mihomo-${{ matrix.arch }}-${{ env.PACKAGE_VERSION }}.run "SSRP" ./install.sh
 
 
       - name: Set tag name
