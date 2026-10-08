@@ -16,6 +16,9 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    # 加上这一段授予写权限
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout repository
