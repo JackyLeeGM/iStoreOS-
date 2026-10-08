@@ -101,8 +101,8 @@ jobs:
       - name: Create self-extracting packages
         run: |
           cd makeself
-          ./makeself.sh nikki_x86_64/ nikki_${{ env.LATEST_TAG }}_x86_64.run "by github action" ./install.sh
-          ./makeself.sh nikki_aarch64_cortex-a53/ nikki_${{ env.LATEST_TAG }}_aarch64_cortex-a53.run "by github action" ./install.sh
+          ./makeself.sh nikki_x86_64/ 24.10-nikki_${{ env.LATEST_TAG }}_x86_64.run "by github action" ./install.sh
+          ./makeself.sh nikki_aarch64_cortex-a53/ 24.10-nikki_${{ env.LATEST_TAG }}_aarch64_cortex-a53.run "by github action" ./install.sh
           
 
       - name: Check file sizes
