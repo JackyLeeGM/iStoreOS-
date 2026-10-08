@@ -16,15 +16,16 @@ jobs:
       - name: 📦 安装构建依赖工具
         run: |
           sudo apt-get update
-          sudo apt-get install -y makeself curl tar gawk
+          sudo apt-get install -y makeself curl tar gawk grep sed
 
       - name: 🚀 检索并下载 25.12 APK 依赖包
         run: |
+          # 优先使用 25.12 官方发布源与镜像源，snapshots 作为备用
           MIRROR_BASE_URLS=(
-            "https://downloads.immortalwrt.org/snapshots/packages"
             "https://downloads.immortalwrt.org/releases/packages-25.12"
-            "https://mirrors.pku.edu.cn/immortalwrt/snapshots/packages"
             "https://mirrors.pku.edu.cn/immortalwrt/releases/packages-25.12"
+            "https://downloads.immortalwrt.org/snapshots/packages"
+            "https://mirrors.pku.edu.cn/immortalwrt/snapshots/packages"
           )
 
           PLATFORMS=("x86_64" "aarch64_generic" "aarch64_cortex-a53")
@@ -58,28 +59,44 @@ jobs:
                   fi
 
                   if [ -n "$index_file" ]; then
-                    # 使用稳健的 awk 解析逻辑匹配 P:包名 与 V:版本号
+                    # 鲁棒性最高的匹配方式：使用 awk 逐行提取包名与版本，规避换行符和 CRLF 干扰
                     local file_name
                     file_name=$(awk -v kw="$keyword" '
-                      BEGIN { RS=""; FS="\n" }
+                      BEGIN { RS="\n\n"; FS="\n" }
                       {
-                        pkg=""; ver=""
+                        p=""; v=""
                         for(i=1; i<=NF; i++) {
-                          gsub(/\r/, "", $i)
-                          if($i ~ /^P:/) pkg=substr($i,3)
-                          if($i ~ /^V:/) ver=substr($i,3)
+                          line=$i
+                          gsub(/\r/, "", line)
+                          if (line ~ /^P:/) {
+                            sub(/^P:[ \t]*/, "", line)
+                            p=line
+                          }
+                          if (line ~ /^V:/) {
+                            sub(/^V:[ \t]*/, "", line)
+                            v=line
+                          }
                         }
-                        if(pkg == kw && ver != "") {
-                          print pkg "-" ver ".apk"
+                        if (p == kw && v != "") {
+                          print p "-" v ".apk"
                           exit
                         }
                       }
                     ' "$index_file")
 
+                    # 如果段落分割失败，使用严格的行匹配兜底
+                    if [ -z "$file_name" ]; then
+                      local ver
+                      ver=$(grep -A 5 -E "^P:[ \t]*${keyword}$" "$index_file" | grep -E "^V:" | head -n 1 | sed -E 's/^V:[ \t]*//' | tr -d '\r')
+                      if [ -n "$ver" ]; then
+                        file_name="${keyword}-${ver}.apk"
+                      fi
+                    fi
+
                     if [ -n "$file_name" ]; then
                       echo "⬇️ 找到匹配文件名: ${file_name}，正在下载..."
                       if curl -fsL --connect-timeout 20 "${repo_url}/${file_name}" -o "${save_dir}/${file_name}"; then
-                        # 如果版本号包含波浪号 ~，替换为标准减号 -
+                        # 替换版本号中的 ~ 字符
                         if [[ "$file_name" == *"~"* ]]; then
                           local clean_name
                           clean_name=$(echo "$file_name" | tr '~' '-')
@@ -114,7 +131,7 @@ jobs:
             download_apk_multisource "$platform" "luci" "luci-i18n-homeproxy-zh-cn" "$SAVE_DIR"
             download_apk_multisource "$platform" "packages" "sing-box" "$SAVE_DIR"
 
-            # 写入标准的 install.sh
+            # 生成安装脚本
             printf '#!/bin/sh\nset -e\necho "🚀 开始安装 HomeProxy (APK 格式)..."\napk update || true\napk add --allow-untrusted *.apk\necho "✅ HomeProxy 安装成功！"\n' > "${SAVE_DIR}/install.sh"
             chmod +x "${SAVE_DIR}/install.sh"
           done
