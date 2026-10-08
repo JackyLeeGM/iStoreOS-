@@ -1,0 +1,50 @@
+name: Build 25.12 HomeProxy
+
+on:
+  schedule:
+    - cron: "10 22 * * *"  # 北京时间早上 6 点 10 分
+  workflow_dispatch:
+
+jobs:
+  build_homeproxy_2512:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v6
+
+      - name: 安装依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y makeself curl wget
+
+      - name: 赋予脚本执行权限
+        run: chmod +x shell/hp25.sh
+
+      - name: 执行打包脚本
+        run: ./shell/hp25.sh --all
+
+      - name: Set tag name
+        id: vars
+        run: |
+          TODAY=$(date -u -d '+8 hour' +'%Y-%m-%d')
+          echo "tag_name=$TODAY" >> $GITHUB_ENV
+
+      - name: 上传 Release（仅 .run 文件）
+        uses: softprops/action-gh-release@v3
+        with:
+          files: dist/homeproxy-run/run/*.run
+          tag_name: ${{ env.tag_name }}
+          name: "Daily Build - ${{ env.tag_name }}"
+          draft: false
+          overwrite_files: true
+          body: |
+             <p align="left">
+              <img src="https://img.shields.io/github/downloads/wkccd/CloudRunFilesBuilder/${{ env.tag_name }}/total?style=for-the-badge&label=%E4%BB%8A%E6%97%A5%E4%B8%8B%E8%BD%BD%E6%AC%A1%E6%95%B0&labelColor=blue&color=black"/>
+              <a href="https://wkdaily.cpolar.cn/archives/1">
+                <img src="https://img.shields.io/badge/可套用国内加速站下载-FC7C0D?logo=github&logoColor=fff&labelColor=000&style=for-the-badge"/>
+              </a>
+             </p>
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
