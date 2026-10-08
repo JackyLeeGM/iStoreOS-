@@ -155,7 +155,7 @@ EOF
     chmod +x "$apk_dir/install.sh"
 
     # 生成 .run 文件（使用 makeself）
-    package_name="25_PassWall_${passwall_version}_${label_arch}.run"
+    package_name="25.12-PassWall_${passwall_version}_${label_arch}.run"
     run_file="$run_dir/$package_name"
 
     if command -v makeself >/dev/null 2>&1; then
