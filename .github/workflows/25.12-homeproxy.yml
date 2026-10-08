@@ -13,44 +13,44 @@ jobs:
       - name: 📥 Checkout
         uses: actions/checkout@v4
 
-      - name: 📦 安装构建依赖工具 (含 alpine apk 工具)
+      - name: 📦 安装构建依赖工具
         run: |
           sudo apt-get update
-          sudo apt-get install -y makeself curl tar gawk zip unzip apk-tools
+          sudo apt-get install -y makeself curl tar gawk zip unzip
 
       - name: 🚀 从 GitHub 拉取 HomeProxy 源码并打成标准 APK 包
         run: |
           TMP_DIR="$(mktemp -d)"
           HOMEPROXY_SRC="${TMP_DIR}/src"
-          
+
           echo "🔍 正在从 GitHub (immortalwrt/homeproxy) 克隆最新源码..."
           git clone --depth=1 https://github.com/immortalwrt/homeproxy.git "$HOMEPROXY_SRC"
 
           VERSION="25.12.$(date +'%Y%m%d')"
 
-          # 构建标准的 APK 打包目录（遵守 OpenWrt / Alpine 规范）
-          PKG_DIR="${TMP_DIR}/pkg_build"
-          mkdir -p "$PKG_DIR"
+          # 构建 OpenWrt / Alpine 标准 APK 文件目录结构
+          PKG_BUILD="${TMP_DIR}/pkg_build"
+          mkdir -p "$PKG_BUILD"
 
-          # 1. 复制所有安装到系统的目标文件
+          # 1. 复制应用系统文件
           if [ -d "${HOMEPROXY_SRC}/root/" ]; then
-            cp -rf ${HOMEPROXY_SRC}/root/* "$PKG_DIR/"
+            cp -rf ${HOMEPROXY_SRC}/root/* "$PKG_BUILD/"
           fi
 
           if [ -d "${HOMEPROXY_SRC}/htdocs/" ]; then
-            mkdir -p "$PKG_DIR/www/"
-            cp -rf ${HOMEPROXY_SRC}/htdocs/* "$PKG_DIR/www/"
+            mkdir -p "$PKG_BUILD/www/"
+            cp -rf ${HOMEPROXY_SRC}/htdocs/* "$PKG_BUILD/www/"
           fi
 
-          # 2. 建立标准的 .PKGINFO 元数据文件 (取代传统的 CONTROL/control)
-          cat << EOF > "$PKG_DIR/.PKGINFO"
+          # 2. 生成标准的 .PKGINFO 控制文件（替代传统 control）
+          cat << EOF > "$PKG_BUILD/.PKGINFO"
           pkgname = luci-app-homeproxy
           pkgver = ${VERSION}
           pkgdesc = LuCI support for HomeProxy
           url = https://github.com/immortalwrt/homeproxy
           builddate = $(date +%s)
           packager = ImmortalWrt
-          size = $(du -sb "$PKG_DIR" | awk '{print $1}')
+          size = $(du -sb "$PKG_BUILD" | awk '{print $1}')
           arch = all
           depend = sing-box
           EOF
@@ -58,22 +58,21 @@ jobs:
           COMMON_TMP="${TMP_DIR}/common_apks"
           mkdir -p "$COMMON_TMP"
 
-          # 3. 使用标准 tar 打包成 OpenWrt apk v2 格式（按控制流和数据流打包）
-          echo "📦 正在打包为标准的 OpenWrt APK v2 包..."
+          # 3. 按照 OpenWrt APK v2 规范生成标准的 apk 包格式
           OUT_APK="${COMMON_TMP}/luci-app-homeproxy-${VERSION}.apk"
-          
-          # 创建 control.tar.gz
-          (cd "$PKG_DIR" && tar -czf "${TMP_DIR}/control.tar.gz" .PKGINFO)
-          
-          # 创建 data.tar.gz
-          (cd "$PKG_DIR" && rm -f .PKGINFO && tar -czf "${TMP_DIR}/data.tar.gz" .)
 
-          # 组合为 Alpine/OpenWrt 标准的 v2 包结构
+          # 打包控制数据段
+          (cd "$PKG_BUILD" && tar -czf "${TMP_DIR}/control.tar.gz" .PKGINFO)
+
+          # 打包应用文件数据段
+          (cd "$PKG_BUILD" && rm -f .PKGINFO && tar -czf "${TMP_DIR}/data.tar.gz" .)
+
+          # 组合为 Alpine/OpenWrt 标准的 v2 包容器
           tar -cf "$OUT_APK" -C "$TMP_DIR" control.tar.gz data.tar.gz
 
-          echo "✅ HomeProxy 标准 APK 生成完成！"
+          echo "✅ HomeProxy 标准 APK 文件构建完成！"
 
-          # 4. 分平台抓取 sing-box 依赖包
+          # 4. 分平台抓取 sing-box 依赖
           MIRROR_BASE_URLS=(
             "https://downloads.immortalwrt.org/releases/packages-25.12"
             "https://downloads.immortalwrt.org/snapshots/packages"
@@ -128,7 +127,7 @@ jobs:
             # 复制生成的 luci-app-homeproxy 包
             cp -f "$COMMON_TMP"/*.apk "$SAVE_DIR/"
 
-            # 抓取对应架构的 sing-box 依赖
+            # 尝试抓取对应架构的 sing-box 依赖包
             download_singbox_apk "$platform" "$SAVE_DIR"
 
             # 写入自动安装脚本
@@ -137,7 +136,7 @@ jobs:
           done
 
           rm -rf "$TMP_DIR"
-          echo "✅ 所有平台自打包流程完成！"
+          echo "✅ 成功从 GitHub 源码与依赖生成所有架构包！"
 
       - name: 🔍 提取版本号并打包
         id: pack
