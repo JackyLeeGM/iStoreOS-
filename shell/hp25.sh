@@ -1,6 +1,9 @@
 #!/bin/sh
 set -eu
 
+SF_PROJECT="openwrt-passwall-build"
+SF_BASE="https://sourceforge.net/projects/$SF_PROJECT/files"
+OPENWRT_RELEASE="${OPENWRT_RELEASE:-25.12}"
 OUT_DIR="${OUT_DIR:-dist/homeproxy-run}"
 WORK_ROOT="${WORK_ROOT:-/tmp/homeproxy-run-build.$$}"
 DEFAULT_ARCHES="x86_64 aarch64_generic aarch64_a53"
@@ -29,6 +32,7 @@ usage() {
   sh hp25.sh --arch x86_64
 
 环境变量:
+  OPENWRT_RELEASE=25.12
   OUT_DIR=dist/homeproxy-run
 EOF
 }
@@ -47,6 +51,16 @@ download_file() {
     return 1
 }
 
+valid_pkg_file() {
+    file="$1"
+    [ -s "$file" ] || return 1
+    [ "$(wc -c < "$file")" -gt 1024 ] || return 1
+    if head -c 512 "$file" 2>/dev/null | tr 'A-Z' 'a-z' | grep -qE '<html|<!doctype|sourceforge'; then
+        return 1
+    fi
+    return 0
+}
+
 source_arch_for() {
     case "$1" in
         x86_64) printf '%s\n' "x86_64" ;;
@@ -57,76 +71,98 @@ source_arch_for() {
     esac
 }
 
-# 从 ImmortalWrt 镜像源或 GitHub 最新 Release 抓取包
-download_target_apk() {
+# 1. 从 ImmortalWrt 的 packages/all/luci 仓库抓取 HomeProxy 通用包 (Noarch)
+download_homeproxy_luci_apk() {
     keyword="$1"
-    source_arch="$2"
-    outdir="$3"
+    outdir="$2"
 
-    log "正在寻找 $keyword ($source_arch)..."
+    log "正在从 ImmortalWrt (all/luci) 获取 $keyword..."
+    index_file="$WORK_ROOT/APKINDEX-all-luci.tar.gz"
+    extract_dir="$WORK_ROOT/index-all-luci"
+    mkdir -p "$extract_dir"
 
-    # 方式 1：尝试从 ImmortalWrt 官方 Snapshots API / Mirror 的 index 中匹配
-    index_file="$WORK_ROOT/index-${source_arch}.html"
-    
-    # 候选 URL 架构列表
-    candidate_urls="
-https://downloads.immortalwrt.org/snapshots/packages/${source_arch}/luci/
-https://downloads.immortalwrt.org/snapshots/packages/${source_arch}/packages/
-https://mirrors.pku.edu.cn/immortalwrt/snapshots/packages/${source_arch}/luci/
-https://mirrors.pku.edu.cn/immortalwrt/snapshots/packages/${source_arch}/packages/
-https://api.github.com/repos/immortalwrt/homeproxy/releases/latest
-"
-
-    for base_url in $candidate_urls; do
-        if echo "$base_url" | grep -q "github.com"; then
-            # GitHub Releases 保底
-            release_json="$WORK_ROOT/gh-release.json"
-            if download_file "$base_url" "$release_json"; then
-                apk_url=$(grep -oE 'https://[^\"]+' "$release_json" | grep -E "${keyword}.*\.apk$" | head -n1 || true)
-                if [ -n "$apk_url" ]; then
-                    filename=$(basename "$apk_url")
-                    log "从 GitHub Releases 找到: $filename"
-                    if download_file "$apk_url" "${outdir}/${filename}"; then
-                        return 0
-                    fi
-                fi
-            fi
-        else
-            # 尝试直接抓取索引/列表
-            idx_url="${base_url}APKINDEX.tar.gz"
-            tar_file="$WORK_ROOT/APKINDEX-${source_arch}-$$.tar.gz"
-            
-            if download_file "$idx_url" "$tar_file"; then
-                extract_dir="$WORK_ROOT/ext-${source_arch}-$$"
-                mkdir -p "$extract_dir"
-                tar -zxf "$tar_file" -C "$extract_dir" 2>/dev/null || true
-                
-                if [ -f "$extract_dir/APKINDEX" ]; then
-                    pkg_name=$(awk -v kw="$keyword" '
-                        BEGIN { P=""; V="" }
-                        /^P:/ { P=$2 }
-                        /^V:/ { V=$2 }
-                        /^$/ {
-                            if (P == kw) {
-                                print P "-" V ".apk"
-                                exit
-                            }
-                            P=""; V=""
+    success=0
+    for base_url in \
+        "https://downloads.immortalwrt.org/snapshots/packages/all/luci" \
+        "https://mirrors.pku.edu.cn/immortalwrt/snapshots/packages/all/luci"
+    do
+        if download_file "${base_url}/APKINDEX.tar.gz" "$index_file"; then
+            if tar -zxf "$index_file" -C "$extract_dir" 2>/dev/null; then
+                pkg_name=$(awk -v kw="$keyword" '
+                    BEGIN { P=""; V="" }
+                    /^P:/ { P=$2 }
+                    /^V:/ { V=$2 }
+                    /^$/ {
+                        if (P == kw) {
+                            print P "-" V ".apk"
+                            exit
                         }
-                    ' "$extract_dir/APKINDEX")
+                        P=""; V=""
+                    }
+                ' "$extract_dir/APKINDEX")
 
-                    if [ -n "$pkg_name" ]; then
-                        log "成功从源 $base_url 找到包: $pkg_name"
-                        if download_file "${base_url}${pkg_name}" "${outdir}/${pkg_name}"; then
-                            return 0
-                        fi
+                if [ -n "$pkg_name" ]; then
+                    log "找到目标文件: $pkg_name"
+                    if download_file "${base_url}/${pkg_name}" "${outdir}/${pkg_name}"; then
+                        success=1
+                        break
                     fi
                 fi
             fi
         fi
     done
 
-    die "无法找到或下载 $keyword"
+    [ "$success" -eq 1 ] || die "无法获取 $keyword"
+}
+
+# 2. 从 SourceForge 抓取对应 CPU 架构的 sing-box 核心二进制 .apk
+latest_sf_file() {
+    source_arch="$1"
+    repo="$2"
+    regex="$3"
+    tmp="$WORK_ROOT/sf-$source_arch-$repo.txt"
+    package_dir="releases/packages-$OPENWRT_RELEASE/$source_arch"
+    rss_url="https://sourceforge.net/projects/$SF_PROJECT/rss?path=/$package_dir/$repo"
+    folder_url="$SF_BASE/$package_dir/$repo/"
+
+    if download_file "$rss_url" "$tmp"; then
+        name="$(grep -oE '[A-Za-z0-9._+-]+\.apk' "$tmp" | grep -E "$regex" | head -n1 || true)"
+        [ -n "$name" ] && { printf '%s\n' "$name"; return 0; }
+    fi
+
+    if download_file "$folder_url" "$tmp"; then
+        name="$(grep -oE '[A-Za-z0-9._+-]+\.apk' "$tmp" | grep -E "$regex" | head -n1 || true)"
+        [ -n "$name" ] && { printf '%s\n' "$name"; return 0; }
+    fi
+    return 1
+}
+
+download_sf_package() {
+    source_arch="$1"; repo="$2"; filename="$3"; outdir="$4"
+    package_dir="releases/packages-$OPENWRT_RELEASE/$source_arch"
+    output="$outdir/$filename"
+
+    for url in \
+        "https://master.dl.sourceforge.net/project/$SF_PROJECT/$package_dir/$repo/$filename" \
+        "https://downloads.sourceforge.net/project/$SF_PROJECT/$package_dir/$repo/$filename" \
+        "https://sourceforge.net/projects/$SF_PROJECT/files/$package_dir/$repo/$filename/download"
+    do
+        rm -f "$output"
+        if download_file "$url" "$output" && valid_pkg_file "$output"; then
+            return 0
+        fi
+        warn "下载失败，尝试下一个源: $filename"
+    done
+    return 1
+}
+
+download_singbox_apk() {
+    source_arch="$1"
+    outdir="$2"
+    log "正在从 SourceForge 获取 sing-box ($source_arch)..."
+    filename="$(latest_sf_file "$source_arch" "passwall_packages" '^sing-box-[0-9].*\.apk$' || true)"
+    [ -n "$filename" ] || die "没有找到 sing-box"
+    download_sf_package "$source_arch" "passwall_packages" "$filename" "$outdir" || die "下载失败: $filename"
 }
 
 build_one() {
@@ -138,12 +174,14 @@ build_one() {
     rm -rf "$apk_dir"
     mkdir -p "$apk_dir" "$run_dir"
 
-    log "开始下载 HomeProxy 依赖包: $label_arch ($source_arch)"
+    log "开始打包 HomeProxy 25.12 架构包: $label_arch ($source_arch)"
 
-    # 依次拉取应用及核心依赖包
-    download_target_apk "luci-app-homeproxy"        "$source_arch" "$apk_dir"
-    download_target_apk "luci-i18n-homeproxy-zh-cn" "$source_arch" "$apk_dir"
-    download_target_apk "sing-box"                  "$source_arch" "$apk_dir"
+    # 下载通用 Luci 界面与中文包 (noarch)
+    download_homeproxy_luci_apk "luci-app-homeproxy"        "$apk_dir"
+    download_homeproxy_luci_apk "luci-i18n-homeproxy-zh-cn" "$apk_dir"
+
+    # 下载架构特定的 sing-box 二进制包
+    download_singbox_apk "$source_arch" "$apk_dir"
 
     hp_version=$(ls "$apk_dir"/luci-app-homeproxy-*.apk 2>/dev/null | head -n1 | sed -n 's/.*luci-app-homeproxy-\([0-9][0-9.]*\).*/\1/p' || echo "1.0.0")
 
