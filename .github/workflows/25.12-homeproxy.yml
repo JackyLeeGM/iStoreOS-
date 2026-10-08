@@ -115,13 +115,13 @@ jobs:
 
             # 自动生成适应 25.12 apk 的 install.sh
             cat << 'EOF' > "${SAVE_DIR}/install.sh"
-#!/bin/sh
-set -e
-echo "🚀 开始安装 HomeProxy (APK 格式)..."
-apk update || true
-apk add --allow-untrusted *.apk
-echo "✅ HomeProxy 安装成功！"
-EOF
+            #!/bin/sh
+            set -e
+            echo "🚀 开始安装 HomeProxy (APK 格式)..."
+            apk update || true
+            apk add --allow-untrusted *.apk
+            echo "✅ HomeProxy 安装成功！"
+            EOF
             chmod +x "${SAVE_DIR}/install.sh"
 
             # 下载对应架构的 sing-box
