@@ -7,7 +7,7 @@
 #=================================================
 
 
-name: Make 24.10 openwrt-daede
+name: Build 24.10 openwrt-daede
 
 on:
   schedule:
