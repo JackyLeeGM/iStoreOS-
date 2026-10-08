@@ -20,25 +20,22 @@ jobs:
 
       - name: 🚀 检索并下载 25.12 APK 依赖包
         run: |
-          # 镜像源根地址（优先尝试 25.12 稳定库，备用 snapshots 库）
           MIRROR_BASE_URLS=(
-            "https://downloads.immortalwrt.org/releases/packages-25.12"
             "https://downloads.immortalwrt.org/snapshots/packages"
-            "https://mirrors.pku.edu.cn/immortalwrt/releases/packages-25.12"
+            "https://downloads.immortalwrt.org/releases/packages-25.12"
             "https://mirrors.pku.edu.cn/immortalwrt/snapshots/packages"
+            "https://mirrors.pku.edu.cn/immortalwrt/releases/packages-25.12"
           )
 
-          # 目标平台架构
           PLATFORMS=("x86_64" "aarch64_generic" "aarch64_cortex-a53")
 
           TMP_DIR="$(mktemp -d)"
 
-          # 通用 APK 下载函数
           download_apk_multisource() {
-            local arch="$1"       # 架构名称, 如 x86_64
-            local subpkg="$2"     # 子目录类别, 如 luci 或 packages
-            local keyword="$3"    # 包名, 如 luci-app-homeproxy
-            local save_dir="$4"   # 存放路径
+            local arch="$1"
+            local subpkg="$2"
+            local keyword="$3"
+            local save_dir="$4"
 
             local success=0
 
@@ -53,32 +50,42 @@ jobs:
 
               if curl -fsL --connect-timeout 8 --retry 2 "${repo_url}/APKINDEX.tar.gz" -o "$index_tar" 2>/dev/null; then
                 if tar -zxf "$index_tar" -C "$extract_dir" 2>/dev/null; then
-                  local file_name
-                  file_name=$(tr -d '\r' < "$extract_dir/APKINDEX" | awk -v kw="$keyword" '
-                    BEGIN { RS=""; FS="\n" }
-                    {
-                      pkg=""; ver=""
-                      for(i=1;i<=NF;i++) {
-                        if($i ~ /^P:/) pkg=substr($i,3)
-                        if($i ~ /^V:/) ver=substr($i,3)
-                      }
-                      if(pkg == kw && ver != "") {
-                        print pkg "-" ver ".apk"
-                        exit
-                      }
-                    }
-                  ')
+                  # 兼容处理 APKINDEX 与 APKINDEX.unsigned 文件名
+                  local index_file=""
+                  if [ -f "$extract_dir/APKINDEX.unsigned" ]; then
+                    index_file="$extract_dir/APKINDEX.unsigned"
+                  elif [ -f "$extract_dir/APKINDEX" ]; then
+                    index_file="$extract_dir/APKINDEX"
+                  fi
 
-                  if [ -n "$file_name" ]; then
-                    echo "⬇️ 找到匹配: ${file_name}，正在下载..."
-                    if curl -fsL --connect-timeout 15 "${repo_url}/${file_name}" -o "${save_dir}/${file_name}"; then
-                      if [[ "$file_name" == *"~"* ]]; then
-                        local new_file
-                        new_file=$(echo "$file_name" | tr '~' '-')
-                        mv "${save_dir}/${file_name}" "${save_dir}/${new_file}"
+                  if [ -n "$index_file" ]; then
+                    local file_name
+                    file_name=$(tr -d '\r' < "$index_file" | awk -v kw="$keyword" '
+                      BEGIN { RS=""; FS="\n" }
+                      {
+                        pkg=""; ver=""
+                        for(i=1;i<=NF;i++) {
+                          if($i ~ /^P:/) pkg=substr($i,3)
+                          if($i ~ /^V:/) ver=substr($i,3)
+                        }
+                        if(pkg == kw && ver != "") {
+                          print pkg "-" ver ".apk"
+                          exit
+                        }
+                      }
+                    ')
+
+                    if [ -n "$file_name" ]; then
+                      echo "⬇️ 找到匹配: ${file_name}，正在下载..."
+                      if curl -fsL --connect-timeout 15 "${repo_url}/${file_name}" -o "${save_dir}/${file_name}"; then
+                        if [[ "$file_name" == *"~"* ]]; then
+                          local new_file
+                          new_file=$(echo "$file_name" | tr '~' '-')
+                          mv "${save_dir}/${file_name}" "${save_dir}/${new_file}"
+                        fi
+                        success=1
+                        break
                       fi
-                      success=1
-                      break
                     fi
                   fi
                 fi
@@ -93,7 +100,6 @@ jobs:
             fi
           }
 
-          # 依次为每一个平台架构抓取需要的依赖
           for platform in "${PLATFORMS[@]}"; do
             echo "=========================================="
             echo "📦 正在处理平台架构: ${platform}"
@@ -102,14 +108,11 @@ jobs:
             SAVE_DIR="$(pwd)/${platform}"
             mkdir -p "$SAVE_DIR"
 
-            # 1. 下载 UI 界面包及语言包
             download_apk_multisource "$platform" "luci" "luci-app-homeproxy" "$SAVE_DIR"
             download_apk_multisource "$platform" "luci" "luci-i18n-homeproxy-zh-cn" "$SAVE_DIR"
-
-            # 2. 下载底层内核 sing-box
             download_apk_multisource "$platform" "packages" "sing-box" "$SAVE_DIR"
 
-            # 3. 自动生成与架构匹配的安装脚本 install.sh
+            # 写入标准的 install.sh（顶格无缩进，防止 EOF 解析异常）
             cat << 'EOF' > "${SAVE_DIR}/install.sh"
             #!/bin/sh
             set -e
@@ -122,7 +125,7 @@ jobs:
           done
 
           rm -rf "$TMP_DIR"
-          echo "✅ 所有架构依赖包获取并准备就绪！"
+          echo "✅ 所有架构依赖包获取完毕！"
 
       - name: 🔍 提取版本号并打包
         id: pack
