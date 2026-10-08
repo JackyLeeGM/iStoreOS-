@@ -55,7 +55,7 @@ jobs:
 
           # 打包各个平台
           for PLATFORM in x86_64 aarch64_generic aarch64_cortex-a53; do
-            makeself "$PLATFORM" "output/homeproxy-${PLATFORM}-${VERSION}.run" \
+            makeself "$PLATFORM" "output/24.10-homeproxy-${PLATFORM}-${VERSION}.run" \
               "homeproxy ${PLATFORM} Installer v${VERSION}" ./install.sh
           done
 
