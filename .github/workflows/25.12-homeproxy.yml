@@ -16,7 +16,7 @@ jobs:
       - name: 📦 安装构建依赖工具
         run: |
           sudo apt-get update
-          sudo apt-get install -y makeself curl tar gawk zip unzip po2lmo
+          sudo apt-get install -y makeself curl tar gawk zip unzip
 
       - name: 🚀 从 GitHub 拉取 HomeProxy 源码并打包
         run: |
@@ -42,21 +42,15 @@ jobs:
             cp -rf ${HOMEPROXY_SRC}/htdocs/* "$PKG_BUILD/www/"
           fi
 
-          # 2. 复制并编译简体中文语言包 (po/zh_Hans -> /usr/share/luci/i18n/)
+          # 2. 部署语言包资源到 /usr/share/luci/i18n/
           I18N_DIR="$PKG_BUILD/usr/share/luci/i18n"
           mkdir -p "$I18N_DIR"
-          
+
           if [ -d "${HOMEPROXY_SRC}/po/zh_Hans" ]; then
-            for po_file in "${HOMEPROXY_SRC}/po/zh_Hans/"*.po; do
-              if [ -f "$po_file" ]; then
-                base_name=$(basename "$po_file" .po)
-                echo "🌐 编译简体中文语言包: ${base_name}.po"
-                po2lmo "$po_file" "${I18N_DIR}/${base_name}.zh-cn.lmo" 2>/dev/null || \
-                po2lmo "$po_file" "${I18N_DIR}/${base_name}.zh_Hans.lmo" 2>/dev/null || true
-              fi
-            done
-            # 同时保留原始 po 资源供 js 界面加载
             cp -rf ${HOMEPROXY_SRC}/po/zh_Hans/* "$I18N_DIR/" 2>/dev/null || true
+          fi
+          if [ -d "${HOMEPROXY_SRC}/po" ]; then
+            cp -rf ${HOMEPROXY_SRC}/po/* "$I18N_DIR/" 2>/dev/null || true
           fi
 
           COMMON_TMP="${TMP_DIR}/common_apks"
@@ -149,7 +143,7 @@ jobs:
               exit 1
             fi
 
-            # 5. 生成安装脚本（修复弹出登录与语言生效支持）
+            # 5. 生成安装脚本
             printf '%s\n' \
               '#!/bin/sh' \
               'set -e' \
@@ -166,7 +160,7 @@ jobs:
               '    apk add sing-box || true' \
               'fi' \
               '' \
-              '# 2. 解压部署 HomeProxy 系统文件' \
+              '# 2. 解压部署 HomeProxy 系统文件与中文包' \
               'HP_TGZ=$(ls luci-app-homeproxy-*.tar.gz 2>/dev/null | head -n 1)' \
               'if [ -n "$HP_TGZ" ]; then' \
               '    echo "📂 正在解压并部署 HomeProxy 文件与中文语言包..."' \
@@ -178,7 +172,7 @@ jobs:
               '{"luci-app-homeproxy":{"description":"Grant access to HomeProxy","read":{"ubus":{"homeproxy":["*"]},"uci":["homeproxy"]},"write":{"uci":["homeproxy"]}}}' \
               'ACL_EOF' \
               '    ' \
-              '    # 仅清理编译界面缓存，保留登录 session 防止掉线' \
+              '    # 清理前端缓存（不清除 session 目录，保持在线登录状态）' \
               '    rm -rf /tmp/luci-indexcache /tmp/luci-modulecache/ 2>/dev/null || true' \
               '    /etc/init.d/rpcd restart 2>/dev/null || true' \
               '    ' \
@@ -187,7 +181,7 @@ jobs:
               '        /etc/init.d/homeproxy enable 2>/dev/null || true' \
               '    fi' \
               '' \
-              '    echo "✅ HomeProxy 安装成功！刷新网页即可直接使用中文界面。"' \
+              '    echo "✅ HomeProxy 安装成功！刷新网页即可显示中文界面。"' \
               'else' \
               '    echo "❌ 错误：找不到 HomeProxy 资源文件！"' \
               '    exit 1' \
