@@ -13,54 +13,67 @@ jobs:
       - name: 📥 Checkout
         uses: actions/checkout@v4
 
-      - name: 📦 安装构建依赖工具
+      - name: 📦 安装构建依赖工具 (含 alpine apk 工具)
         run: |
           sudo apt-get update
-          sudo apt-get install -y makeself curl tar gawk zip unzip
+          sudo apt-get install -y makeself curl tar gawk zip unzip apk-tools
 
-      - name: 🚀 从 GitHub 拉取 HomeProxy 最新源码并打包
+      - name: 🚀 从 GitHub 拉取 HomeProxy 源码并打成标准 APK 包
         run: |
           TMP_DIR="$(mktemp -d)"
-          HOMEPROXY_BUILD_DIR="${TMP_DIR}/homeproxy_pkg"
-          mkdir -p "$HOMEPROXY_BUILD_DIR/usr/lib/ucode/luci/template/homeproxy"
-          mkdir -p "$HOMEPROXY_BUILD_DIR/usr/share/luci/menu.d"
-          mkdir -p "$HOMEPROXY_BUILD_DIR/etc/init.d"
-          mkdir -p "$HOMEPROXY_BUILD_DIR/etc/config"
-          mkdir -p "$HOMEPROXY_BUILD_DIR/CONTROL"
-
+          HOMEPROXY_SRC="${TMP_DIR}/src"
+          
           echo "🔍 正在从 GitHub (immortalwrt/homeproxy) 克隆最新源码..."
-          git clone --depth=1 https://github.com/immortalwrt/homeproxy.git "${TMP_DIR}/src"
+          git clone --depth=1 https://github.com/immortalwrt/homeproxy.git "$HOMEPROXY_SRC"
 
-          # 提取源码中的版本控制信息
           VERSION="25.12.$(date +'%Y%m%d')"
 
-          echo "📦 [1/3] 正在组装 HomeProxy 应用文件..."
-          # 复制 root 目录下的配置、脚本与服务
-          if [ -d "${TMP_DIR}/src/root/" ]; then
-            cp -rf ${TMP_DIR}/src/root/* "$HOMEPROXY_BUILD_DIR/"
+          # 构建标准的 APK 打包目录（遵守 OpenWrt / Alpine 规范）
+          PKG_DIR="${TMP_DIR}/pkg_build"
+          mkdir -p "$PKG_DIR"
+
+          # 1. 复制所有安装到系统的目标文件
+          if [ -d "${HOMEPROXY_SRC}/root/" ]; then
+            cp -rf ${HOMEPROXY_SRC}/root/* "$PKG_DIR/"
           fi
 
-          # 复制 LuCI 界面文件 (htdocs/luci-static)
-          if [ -d "${TMP_DIR}/src/htdocs/" ]; then
-            mkdir -p "$HOMEPROXY_BUILD_DIR/www/"
-            cp -rf ${TMP_DIR}/src/htdocs/* "$HOMEPROXY_BUILD_DIR/www/"
+          if [ -d "${HOMEPROXY_SRC}/htdocs/" ]; then
+            mkdir -p "$PKG_DIR/www/"
+            cp -rf ${HOMEPROXY_SRC}/htdocs/* "$PKG_DIR/www/"
           fi
 
-          # 建立通用 control 配置
-          cat << EOF > "$HOMEPROXY_BUILD_DIR/CONTROL/control"
-          Package: luci-app-homeproxy
-          Version: ${VERSION}
-          Architecture: all
-          Maintainer: ImmortalWrt
-          Description: LuCI support for HomeProxy
+          # 2. 建立标准的 .PKGINFO 元数据文件 (取代传统的 CONTROL/control)
+          cat << EOF > "$PKG_DIR/.PKGINFO"
+          pkgname = luci-app-homeproxy
+          pkgver = ${VERSION}
+          pkgdesc = LuCI support for HomeProxy
+          url = https://github.com/immortalwrt/homeproxy
+          builddate = $(date +%s)
+          packager = ImmortalWrt
+          size = $(du -sb "$PKG_DIR" | awk '{print $1}')
+          arch = all
+          depend = sing-box
           EOF
 
-          # 自动打成标准的 apk 安装包文件
           COMMON_TMP="${TMP_DIR}/common_apks"
           mkdir -p "$COMMON_TMP"
-          (cd "$HOMEPROXY_BUILD_DIR" && tar -czf "${COMMON_TMP}/luci-app-homeproxy-${VERSION}.apk" .)
 
-          echo "📦 [2/3] 分平台抓取 sing-box 依赖并组装目录..."
+          # 3. 使用标准 tar 打包成 OpenWrt apk v2 格式（按控制流和数据流打包）
+          echo "📦 正在打包为标准的 OpenWrt APK v2 包..."
+          OUT_APK="${COMMON_TMP}/luci-app-homeproxy-${VERSION}.apk"
+          
+          # 创建 control.tar.gz
+          (cd "$PKG_DIR" && tar -czf "${TMP_DIR}/control.tar.gz" .PKGINFO)
+          
+          # 创建 data.tar.gz
+          (cd "$PKG_DIR" && rm -f .PKGINFO && tar -czf "${TMP_DIR}/data.tar.gz" .)
+
+          # 组合为 Alpine/OpenWrt 标准的 v2 包结构
+          tar -cf "$OUT_APK" -C "$TMP_DIR" control.tar.gz data.tar.gz
+
+          echo "✅ HomeProxy 标准 APK 生成完成！"
+
+          # 4. 分平台抓取 sing-box 依赖包
           MIRROR_BASE_URLS=(
             "https://downloads.immortalwrt.org/releases/packages-25.12"
             "https://downloads.immortalwrt.org/snapshots/packages"
@@ -71,7 +84,6 @@ jobs:
           download_singbox_apk() {
             local arch="$1"
             local save_dir="$2"
-            local success=0
 
             for base in "${MIRROR_BASE_URLS[@]}"; do
               local repo_url="${base}/${arch}/packages"
@@ -96,7 +108,6 @@ jobs:
                       local file_name="sing-box-${ver}.apk"
                       echo "⬇️ 找到 sing-box 依赖: ${file_name}，正在下载..."
                       if curl -fsL --connect-timeout 20 "${repo_url}/${file_name}" -o "${save_dir}/${file_name}"; then
-                        success=1
                         break
                       fi
                     fi
@@ -117,7 +128,7 @@ jobs:
             # 复制生成的 luci-app-homeproxy 包
             cp -f "$COMMON_TMP"/*.apk "$SAVE_DIR/"
 
-            # 尝试抓取对应架构的 sing-box 依赖
+            # 抓取对应架构的 sing-box 依赖
             download_singbox_apk "$platform" "$SAVE_DIR"
 
             # 写入自动安装脚本
@@ -126,7 +137,7 @@ jobs:
           done
 
           rm -rf "$TMP_DIR"
-          echo "✅ 成功从 GitHub 源码与依赖生成所有架构包！"
+          echo "✅ 所有平台自打包流程完成！"
 
       - name: 🔍 提取版本号并打包
         id: pack
