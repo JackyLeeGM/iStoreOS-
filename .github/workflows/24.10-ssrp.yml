@@ -300,8 +300,8 @@ jobs:
       - name: Create self-extracting archives
         run: |
             cd makeself
-            ./makeself.sh x86_64/ ssrp_mihomo_x86_64-${ssrp_version}.run "by github action" ./install.sh
-            ./makeself.sh a53/ ssrp_mihomo_aarch64_cortex-a53-${ssrp_version}.run "by github action" ./install.sh
+            ./makeself.sh x86_64/ 24.10-ssrp_mihomo_x86_64-${ssrp_version}.run "by github action" ./install.sh
+            ./makeself.sh a53/ 24.10-ssrp_mihomo_aarch64_cortex-a53-${ssrp_version}.run "by github action" ./install.sh
                 
       
       - name: Set tag name
