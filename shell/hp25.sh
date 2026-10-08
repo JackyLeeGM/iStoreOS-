@@ -1,243 +1,85 @@
-#!/bin/sh
-set -eu
-
-SF_PROJECT="openwrt-passwall-build"
-SF_BASE="https://sourceforge.net/projects/$SF_PROJECT/files"
-OPENWRT_RELEASE="${OPENWRT_RELEASE:-25.12}"
-OUT_DIR="${OUT_DIR:-dist/homeproxy-run}"
-WORK_ROOT="${WORK_ROOT:-/tmp/homeproxy-run-build.$$}"
-DEFAULT_ARCHES="x86_64 aarch64_generic aarch64_a53"
-
-log() {
-    printf '%s\n' "==> $*"
-}
-
-warn() {
-    printf '%s\n' "[WARN] $*" >&2
-}
-
-die() {
-    printf '%s\n' "[ERROR] $*" >&2
-    exit 1
-}
-
-need_cmd() {
-    command -v "$1" >/dev/null 2>&1 || die "缺少命令: $1"
-}
-
-usage() {
-    cat <<EOF
-用法:
-  sh hp25.sh --all
-  sh hp25.sh --arch x86_64
-
-环境变量:
-  OPENWRT_RELEASE=25.12
-  OUT_DIR=dist/homeproxy-run
-EOF
-}
-
-download_file() {
-    url="$1"
-    output="$2"
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL --retry 3 --connect-timeout 20 "$url" -o "$output" && return 0
-        curl -kfsSL --retry 2 --connect-timeout 20 "$url" -o "$output" && return 0
-    fi
-    if command -v wget >/dev/null 2>&1; then
-        wget -qO "$output" "$url" && return 0
-        wget --no-check-certificate -qO "$output" "$url" && return 0
-    fi
-    return 1
-}
-
-valid_pkg_file() {
-    file="$1"
-    [ -s "$file" ] || return 1
-    [ "$(wc -c < "$file")" -gt 1024 ] || return 1
-    if head -c 512 "$file" 2>/dev/null | tr 'A-Z' 'a-z' | grep -qE '<html|<!doctype|sourceforge'; then
-        return 1
-    fi
-    return 0
-}
-
-source_arch_for() {
-    case "$1" in
-        x86_64) printf '%s\n' "x86_64" ;;
-        aarch64_generic) printf '%s\n' "aarch64_generic" ;;
-        aarch64_a53) printf '%s\n' "aarch64_cortex-a53" ;;
-        aarch64_a72) printf '%s\n' "aarch64_cortex-a72" ;;
-        *) die "不支持的架构: $1" ;;
-    esac
-}
-
-# 1. 从 ImmortalWrt 的 packages/all/luci 仓库抓取 HomeProxy 通用包 (Noarch)
-download_homeproxy_luci_apk() {
-    keyword="$1"
-    outdir="$2"
-
-    log "正在从 ImmortalWrt (all/luci) 获取 $keyword..."
-    index_file="$WORK_ROOT/APKINDEX-all-luci.tar.gz"
-    extract_dir="$WORK_ROOT/index-all-luci"
-    mkdir -p "$extract_dir"
-
-    success=0
-    for base_url in \
-        "https://downloads.immortalwrt.org/snapshots/packages/all/luci" \
-        "https://mirrors.pku.edu.cn/immortalwrt/snapshots/packages/all/luci"
-    do
-        if download_file "${base_url}/APKINDEX.tar.gz" "$index_file"; then
-            if tar -zxf "$index_file" -C "$extract_dir" 2>/dev/null; then
-                pkg_name=$(awk -v kw="$keyword" '
-                    BEGIN { P=""; V="" }
-                    /^P:/ { P=$2 }
-                    /^V:/ { V=$2 }
-                    /^$/ {
-                        if (P == kw) {
-                            print P "-" V ".apk"
-                            exit
-                        }
-                        P=""; V=""
-                    }
-                ' "$extract_dir/APKINDEX")
-
-                if [ -n "$pkg_name" ]; then
-                    log "找到目标文件: $pkg_name"
-                    if download_file "${base_url}/${pkg_name}" "${outdir}/${pkg_name}"; then
-                        success=1
-                        break
-                    fi
-                fi
-            fi
-        fi
-    done
-
-    [ "$success" -eq 1 ] || die "无法获取 $keyword"
-}
-
-# 2. 从 SourceForge 抓取对应 CPU 架构的 sing-box 核心二进制 .apk
-latest_sf_file() {
-    source_arch="$1"
-    repo="$2"
-    regex="$3"
-    tmp="$WORK_ROOT/sf-$source_arch-$repo.txt"
-    package_dir="releases/packages-$OPENWRT_RELEASE/$source_arch"
-    rss_url="https://sourceforge.net/projects/$SF_PROJECT/rss?path=/$package_dir/$repo"
-    folder_url="$SF_BASE/$package_dir/$repo/"
-
-    if download_file "$rss_url" "$tmp"; then
-        name="$(grep -oE '[A-Za-z0-9._+-]+\.apk' "$tmp" | grep -E "$regex" | head -n1 || true)"
-        [ -n "$name" ] && { printf '%s\n' "$name"; return 0; }
-    fi
-
-    if download_file "$folder_url" "$tmp"; then
-        name="$(grep -oE '[A-Za-z0-9._+-]+\.apk' "$tmp" | grep -E "$regex" | head -n1 || true)"
-        [ -n "$name" ] && { printf '%s\n' "$name"; return 0; }
-    fi
-    return 1
-}
-
-download_sf_package() {
-    source_arch="$1"; repo="$2"; filename="$3"; outdir="$4"
-    package_dir="releases/packages-$OPENWRT_RELEASE/$source_arch"
-    output="$outdir/$filename"
-
-    for url in \
-        "https://master.dl.sourceforge.net/project/$SF_PROJECT/$package_dir/$repo/$filename" \
-        "https://downloads.sourceforge.net/project/$SF_PROJECT/$package_dir/$repo/$filename" \
-        "https://sourceforge.net/projects/$SF_PROJECT/files/$package_dir/$repo/$filename/download"
-    do
-        rm -f "$output"
-        if download_file "$url" "$output" && valid_pkg_file "$output"; then
-            return 0
-        fi
-        warn "下载失败，尝试下一个源: $filename"
-    done
-    return 1
-}
-
-download_singbox_apk() {
-    source_arch="$1"
-    outdir="$2"
-    log "正在从 SourceForge 获取 sing-box ($source_arch)..."
-    filename="$(latest_sf_file "$source_arch" "passwall_packages" '^sing-box-[0-9].*\.apk$' || true)"
-    [ -n "$filename" ] || die "没有找到 sing-box"
-    download_sf_package "$source_arch" "passwall_packages" "$filename" "$outdir" || die "下载失败: $filename"
-}
-
-build_one() {
-    label_arch="$1"
-    source_arch="$(source_arch_for "$label_arch")"
-    apk_dir="$OUT_DIR/apks/$label_arch"
-    run_dir="$OUT_DIR/run"
-
-    rm -rf "$apk_dir"
-    mkdir -p "$apk_dir" "$run_dir"
-
-    log "开始打包 HomeProxy 25.12 架构包: $label_arch ($source_arch)"
-
-    # 下载通用 Luci 界面与中文包 (noarch)
-    download_homeproxy_luci_apk "luci-app-homeproxy"        "$apk_dir"
-    download_homeproxy_luci_apk "luci-i18n-homeproxy-zh-cn" "$apk_dir"
-
-    # 下载架构特定的 sing-box 二进制包
-    download_singbox_apk "$source_arch" "$apk_dir"
-
-    hp_version=$(ls "$apk_dir"/luci-app-homeproxy-*.apk 2>/dev/null | head -n1 | sed -n 's/.*luci-app-homeproxy-\([0-9][0-9.]*\).*/\1/p' || echo "1.0.0")
-
-    # 创建适用于 OpenWrt 25.12 (apk 包管理器) 的 install.sh
-    cat > "$apk_dir/install.sh" <<'EOF'
-#!/bin/sh
+#!/bin/bash
 set -e
-apk update
-apk add --allow-untrusted *.apk
-echo "HomeProxy 安装完成！"
-EOF
-    chmod +x "$apk_dir/install.sh"
 
-    # 生成自解压 .run 安装包
-    package_name="25.12-HomeProxy_${hp_version}_${label_arch}.run"
-    run_file="$run_dir/$package_name"
+# 1. 定义 25.12 (snapshots) 的 APK 源基准地址
+BASE_MIRROR="https://mirrors.pku.edu.cn/immortalwrt/snapshots/packages"
 
-    if command -v makeself >/dev/null 2>&1; then
-        makeself --notemp "$apk_dir" "$run_file" "HomeProxy ${hp_version} for ${label_arch}" ./install.sh
-        log "生成 .run 文件: $run_file"
-    else
-        log "未找到 makeself，仅保留 APK"
+# 平台架构列表
+declare -A PLATFORMS=(
+  ["x86_64"]="${BASE_MIRROR}/x86_64"
+  ["aarch64_generic"]="${BASE_MIRROR}/aarch64_generic"
+  ["aarch64_cortex-a53"]="${BASE_MIRROR}/aarch64_cortex-a53"
+)
+
+# 各类包对应的子仓库 (luci / packages)
+declare -A PACKAGE_SOURCES=(
+  ["luci-app-homeproxy"]="luci"
+  ["luci-i18n-homeproxy-zh-cn"]="luci"
+  ["sing-box"]="packages"
+)
+
+OUT_DIR=$(pwd)
+TMP_DIR="$(mktemp -d)"
+
+cleanup() {
+  rm -rf "$TMP_DIR"
+}
+trap cleanup EXIT
+
+for platform in "${!PLATFORMS[@]}"; do
+  BASE_URL="${PLATFORMS[$platform]}"
+  SAVE_DIR="${OUT_DIR}/${platform}"
+  mkdir -p "$SAVE_DIR"
+
+  echo "📦 正在处理平台: $platform"
+
+  for keyword in "${!PACKAGE_SOURCES[@]}"; do
+    subdir="${PACKAGE_SOURCES[$keyword]}"
+    URL="${BASE_URL}/${subdir}"
+    INDEX_TAR="${TMP_DIR}/${platform}_${subdir}_APKINDEX.tar.gz"
+    EXTRACT_DIR="${TMP_DIR}/${platform}_${subdir}_index"
+    mkdir -p "$EXTRACT_DIR"
+
+    echo "🔍 从 APKINDEX.tar.gz 查找 $keyword"
+
+    # 下载并解压 25.12 的 APKINDEX.tar.gz
+    if ! curl -fsL "${URL}/APKINDEX.tar.gz" -o "$INDEX_TAR"; then
+      echo "⚠️ 无法获取 ${URL}/APKINDEX.tar.gz"
+      continue
     fi
 
-    log "架构 $label_arch 处理完成 (版本: $hp_version)"
-}
+    tar -zxf "$INDEX_TAR" -C "$EXTRACT_DIR"
 
-main() {
-    need_cmd grep sed awk basename ls tar
+    # 从 APKINDEX 文本文件中查找精准包名 (格式为 P:包名 \n V:版本号)
+    FILE=$(awk -v kw="$keyword" '
+      BEGIN { P=""; V="" }
+      /^P:/ { P=$2 }
+      /^V:/ { V=$2 }
+      /^$/ {
+        if (P == kw) {
+          print P "-" V ".apk"
+          exit
+        }
+        P=""; V=""
+      }
+    ' "$EXTRACT_DIR/APKINDEX")
 
-    mkdir -p "$WORK_ROOT"
-    trap 'rm -rf "$WORK_ROOT" 2>/dev/null || true' EXIT INT TERM
+    if [ -n "$FILE" ]; then
+      echo "⬇️ 正在下载: $FILE"
+      if curl -fsL -o "${SAVE_DIR}/${FILE}" "${URL}/${FILE}"; then
+        # 🚧 兼容文件名中波浪号 ~ 处理
+        if [[ "$FILE" == *"~"* ]]; then
+          NEW_FILE=$(echo "$FILE" | tr '~' '-')
+          mv "${SAVE_DIR}/${FILE}" "${SAVE_DIR}/${NEW_FILE}"
+          echo "🔧 已重命名为: $NEW_FILE"
+        fi
+      else
+        echo "❌ 下载失败: ${FILE}"
+      fi
+    else
+      echo "❌ 未找到匹配包: $keyword"
+    fi
+  done
+done
 
-    arches=""
-    [ "$#" -eq 0 ] && { usage; exit 0; }
-
-    while [ "$#" -gt 0 ]; do
-        case "$1" in
-            --all) arches="$DEFAULT_ARCHES"; shift ;;
-            --arch)
-                [ "$#" -ge 2 ] || die "--arch 需要参数"
-                arches="$arches $2"
-                shift 2
-                ;;
-            --help|-h) usage; exit 0 ;;
-            *) die "未知参数: $1" ;;
-        esac
-    done
-
-    [ -n "$arches" ] || die "请指定 --all 或 --arch"
-
-    for arch in $arches; do
-        build_one "$arch"
-    done
-
-    log "全部完成！APK 在 $OUT_DIR/apks/，.run 在 $OUT_DIR/run/"
-}
-
-main "$@"
+echo "✅ 下载完成，文件已分别存入 x86_64、aarch64_generic、aarch64_cortex-a53 目录中。"
