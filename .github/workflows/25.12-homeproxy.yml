@@ -28,7 +28,7 @@ jobs:
 
           VERSION="25.12.$(date +'%Y%m%d')"
 
-          # 构建 OpenWrt / Alpine 标准 APK 文件目录结构
+          # 构建应用根目录结构
           PKG_BUILD="${TMP_DIR}/pkg_build"
           mkdir -p "$PKG_BUILD"
 
@@ -42,7 +42,7 @@ jobs:
             cp -rf ${HOMEPROXY_SRC}/htdocs/* "$PKG_BUILD/www/"
           fi
 
-          # 2. 生成标准的 .PKGINFO 控制文件（替代传统 control）
+          # 2. 生成标准的 .PKGINFO 控制文件
           cat << EOF > "$PKG_BUILD/.PKGINFO"
           pkgname = luci-app-homeproxy
           pkgver = ${VERSION}
@@ -58,62 +58,75 @@ jobs:
           COMMON_TMP="${TMP_DIR}/common_apks"
           mkdir -p "$COMMON_TMP"
 
-          # 3. 按照 OpenWrt APK v2 规范生成标准的 apk 包格式
+          # 3. 标准生成 .apk
           OUT_APK="${COMMON_TMP}/luci-app-homeproxy-${VERSION}.apk"
+          (cd "$PKG_BUILD" && tar -c --format=posix .PKGINFO | gzip -n -9 > "${TMP_DIR}/control.tar.gz")
+          (cd "$PKG_BUILD" && rm -f .PKGINFO && tar -c --format=posix . | gzip -n -9 > "${TMP_DIR}/data.tar.gz")
+          tar -c --format=posix -f "$OUT_APK" -C "$TMP_DIR" control.tar.gz data.tar.gz
 
-          # 打包控制数据段
-          (cd "$PKG_BUILD" && tar -czf "${TMP_DIR}/control.tar.gz" .PKGINFO)
+          echo "✅ HomeProxy 界面包构建完成！"
 
-          # 打包应用文件数据段
-          (cd "$PKG_BUILD" && rm -f .PKGINFO && tar -czf "${TMP_DIR}/data.tar.gz" .)
-
-          # 组合为 Alpine/OpenWrt 标准的 v2 包容器
-          tar -cf "$OUT_APK" -C "$TMP_DIR" control.tar.gz data.tar.gz
-
-          echo "✅ HomeProxy 标准 APK 文件构建完成！"
-
-          # 4. 分平台抓取 sing-box 依赖
-          MIRROR_BASE_URLS=(
-            "https://downloads.immortalwrt.org/releases/packages-25.12"
-            "https://downloads.immortalwrt.org/snapshots/packages"
-          )
-
+          # 4. 多渠道、高容错抓取 sing-box 依赖
           PLATFORMS=("x86_64" "aarch64_generic" "aarch64_cortex-a53")
 
           download_singbox_apk() {
             local arch="$1"
             local save_dir="$2"
+            local success=0
 
-            for base in "${MIRROR_BASE_URLS[@]}"; do
-              local repo_url="${base}/${arch}/packages"
+            # 候选源列表 (包含 25.12 官方源与 snapshots)
+            local MIRROR_URLS=(
+              "https://downloads.immortalwrt.org/releases/packages-25.12/${arch}/packages"
+              "https://downloads.immortalwrt.org/snapshots/packages/${arch}/packages"
+              "https://mirrors.cernet.edu.cn/openwrt/releases/25.12.5/packages/${arch}/packages"
+            )
+
+            for repo_url in "${MIRROR_URLS[@]}"; do
+              echo "🔍 尝试从仓库获取 sing-box: ${repo_url}"
               local hash_id=$(echo -n "$repo_url" | md5sum | awk '{print $1}')
               local index_tar="${TMP_DIR}/APKINDEX_${hash_id}.tar.gz"
               local extract_dir="${TMP_DIR}/ext_${hash_id}"
               mkdir -p "$extract_dir"
 
               if curl -fsL --connect-timeout 10 "${repo_url}/APKINDEX.tar.gz" -o "$index_tar" 2>/dev/null; then
-                if tar -zxf "$index_tar" -C "$extract_dir" 2>/dev/null; then
-                  local index_file=""
-                  if [ -f "$extract_dir/APKINDEX.unsigned" ]; then
-                    index_file="$extract_dir/APKINDEX.unsigned"
-                  elif [ -f "$extract_dir/APKINDEX" ]; then
-                    index_file="$extract_dir/APKINDEX"
-                  fi
+                tar -zxf "$index_tar" -C "$extract_dir" 2>/dev/null || true
+                local index_file=$(ls "$extract_dir"/APKINDEX* 2>/dev/null | head -n 1 || true)
 
-                  if [ -n "$index_file" ]; then
-                    local ver
-                    ver=$(grep -A 5 -E "^P:[ \t]*sing-box$" "$index_file" | grep -E "^V:" | head -n 1 | sed -E 's/^V:[ \t]*//' | tr -d '\r')
-                    if [ -n "$ver" ]; then
-                      local file_name="sing-box-${ver}.apk"
-                      echo "⬇️ 找到 sing-box 依赖: ${file_name}，正在下载..."
-                      if curl -fsL --connect-timeout 20 "${repo_url}/${file_name}" -o "${save_dir}/${file_name}"; then
-                        break
-                      fi
+                if [ -n "$index_file" ] && [ -f "$index_file" ]; then
+                  # 提取 sing-box 的包文件名与版本
+                  local singbox_apk=$(grep -E "^P:sing-box$" -A 10 "$index_file" | grep -E "^V:" | head -n 1 | awk '{print $1}' | sed 's/V://')
+                  if [ -n "$singbox_apk" ]; then
+                    local target_file="sing-box-${singbox_apk}.apk"
+                    echo "⬇️ 找到依赖: ${target_file}，开始下载..."
+                    if curl -fsL --connect-timeout 30 "${repo_url}/${target_file}" -o "${save_dir}/${target_file}"; then
+                      echo "✅ 依赖 ${target_file} 下载成功！"
+                      success=1
+                      break
                     fi
                   fi
                 fi
               fi
             done
+
+            if [ $success -eq 0 ]; then
+              echo "⚠️ 警告: 从索引匹配 sing-box 失败，尝试直接按关键字匹配下载..."
+              # 保底机制：直接请求 HTML 列表抓取最新的 sing-box apk
+              for repo_url in "${MIRROR_URLS[@]}"; do
+                local matched_file=$(curl -fsL --connect-timeout 10 "$repo_url/" 2>/dev/null | grep -oE 'sing-box-[0-9][^"]+\.apk' | head -n 1 || true)
+                if [ -n "$matched_file" ]; then
+                  echo "⬇️ 通过页面正则抓取到依赖: ${matched_file}"
+                  if curl -fsL --connect-timeout 30 "${repo_url}/${matched_file}" -o "${save_dir}/${matched_file}"; then
+                    success=1
+                    break
+                  fi
+                fi
+              done
+            fi
+
+            if [ $success -eq 0 ]; then
+              echo "❌ 严重错误: 无法为架构 ${arch} 下载 sing-box 依赖！"
+              return 1
+            fi
           }
 
           for platform in "${PLATFORMS[@]}"; do
@@ -124,11 +137,19 @@ jobs:
             SAVE_DIR="$(pwd)/${platform}"
             mkdir -p "$SAVE_DIR"
 
-            # 复制生成的 luci-app-homeproxy 包
+            # 复制 HomeProxy 包
             cp -f "$COMMON_TMP"/*.apk "$SAVE_DIR/"
 
-            # 尝试抓取对应架构的 sing-box 依赖包
+            # 抓取 sing-box 依赖
             download_singbox_apk "$platform" "$SAVE_DIR"
+
+            # 安全校验：确保当前架构目录大小 > 5MB（保证包含 sing-box 二进制）
+            DIR_SIZE_KB=$(du -sk "$SAVE_DIR" | awk '{print $1}')
+            echo "📊 架构目录 ${platform} 当前体积: ${DIR_SIZE_KB} KB"
+            if [ "$DIR_SIZE_KB" -lt 5000 ]; then
+              echo "❌ 校验失败：架构 ${platform} 缺少 sing-box 核心包（总体积小于 5MB）！"
+              exit 1
+            fi
 
             # 写入自动安装脚本
             printf '#!/bin/sh\nset -e\necho "🚀 开始安装 HomeProxy (APK 格式)..."\napk update || true\napk add --allow-untrusted *.apk\necho "✅ HomeProxy 安装成功！"\n' > "${SAVE_DIR}/install.sh"
@@ -136,7 +157,7 @@ jobs:
           done
 
           rm -rf "$TMP_DIR"
-          echo "✅ 成功从 GitHub 源码与依赖生成所有架构包！"
+          echo "✅ 所有架构（含 sing-box 核心）打包成功！"
 
       - name: 🔍 提取版本号并打包
         id: pack
