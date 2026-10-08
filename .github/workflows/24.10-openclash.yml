@@ -94,8 +94,8 @@ jobs:
           mv openclash-x86 makeself/
           mv openclash-a53 makeself/
           cd makeself
-          ./makeself.sh openclash-x86/ openclash-x86-64-${{ env.version }}.run "by github action" ./install.sh
-          ./makeself.sh openclash-a53/ openclash-aarch64_cortex-a53-${{ env.version }}.run "by github action" ./install.sh
+          ./makeself.sh openclash-x86/ 24.10-openclash-x86-64-${{ env.version }}.run "by github action" ./install.sh
+          ./makeself.sh openclash-a53/ 24.10-openclash-aarch64_cortex-a53-${{ env.version }}.run "by github action" ./install.sh
       
       - name: Set tag name
         id: vars
