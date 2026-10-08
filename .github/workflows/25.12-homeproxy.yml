@@ -132,7 +132,7 @@ jobs:
               exit 1
             fi
 
-            # 4. 生成兼容解压与依赖安装的脚本
+            # 4. 生成兼容解压与依赖安装的脚本（使用 <<- 允许前导 Tab，或将结束词移至行首）
             cat << 'EOF' > "${SAVE_DIR}/install.sh"
             #!/bin/sh
             set -e
