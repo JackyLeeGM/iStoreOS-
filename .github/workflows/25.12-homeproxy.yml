@@ -48,9 +48,8 @@ jobs:
 
               echo "🔍 正在检索 [${arch}/${subpkg}] -> ${repo_url}"
 
-              if curl -fsL --connect-timeout 8 --retry 2 "${repo_url}/APKINDEX.tar.gz" -o "$index_tar" 2>/dev/null; then
+              if curl -fsL --connect-timeout 10 --retry 2 "${repo_url}/APKINDEX.tar.gz" -o "$index_tar" 2>/dev/null; then
                 if tar -zxf "$index_tar" -C "$extract_dir" 2>/dev/null; then
-                  # 兼容处理 APKINDEX 与 APKINDEX.unsigned 文件名
                   local index_file=""
                   if [ -f "$extract_dir/APKINDEX.unsigned" ]; then
                     index_file="$extract_dir/APKINDEX.unsigned"
@@ -59,12 +58,14 @@ jobs:
                   fi
 
                   if [ -n "$index_file" ]; then
+                    # 使用稳健的 awk 解析逻辑匹配 P:包名 与 V:版本号
                     local file_name
-                    file_name=$(tr -d '\r' < "$index_file" | awk -v kw="$keyword" '
+                    file_name=$(awk -v kw="$keyword" '
                       BEGIN { RS=""; FS="\n" }
                       {
                         pkg=""; ver=""
-                        for(i=1;i<=NF;i++) {
+                        for(i=1; i<=NF; i++) {
+                          gsub(/\r/, "", $i)
                           if($i ~ /^P:/) pkg=substr($i,3)
                           if($i ~ /^V:/) ver=substr($i,3)
                         }
@@ -73,15 +74,16 @@ jobs:
                           exit
                         }
                       }
-                    ')
+                    ' "$index_file")
 
                     if [ -n "$file_name" ]; then
-                      echo "⬇️ 找到匹配: ${file_name}，正在下载..."
-                      if curl -fsL --connect-timeout 15 "${repo_url}/${file_name}" -o "${save_dir}/${file_name}"; then
+                      echo "⬇️ 找到匹配文件名: ${file_name}，正在下载..."
+                      if curl -fsL --connect-timeout 20 "${repo_url}/${file_name}" -o "${save_dir}/${file_name}"; then
+                        # 如果版本号包含波浪号 ~，替换为标准减号 -
                         if [[ "$file_name" == *"~"* ]]; then
-                          local new_file
-                          new_file=$(echo "$file_name" | tr '~' '-')
-                          mv "${save_dir}/${file_name}" "${save_dir}/${new_file}"
+                          local clean_name
+                          clean_name=$(echo "$file_name" | tr '~' '-')
+                          mv "${save_dir}/${file_name}" "${save_dir}/${clean_name}"
                         fi
                         success=1
                         break
@@ -112,7 +114,7 @@ jobs:
             download_apk_multisource "$platform" "luci" "luci-i18n-homeproxy-zh-cn" "$SAVE_DIR"
             download_apk_multisource "$platform" "packages" "sing-box" "$SAVE_DIR"
 
-            # 使用 printf 生成 install.sh，无任何 Here-Doc 语法冲突风险
+            # 写入标准的 install.sh
             printf '#!/bin/sh\nset -e\necho "🚀 开始安装 HomeProxy (APK 格式)..."\napk update || true\napk add --allow-untrusted *.apk\necho "✅ HomeProxy 安装成功！"\n' > "${SAVE_DIR}/install.sh"
             chmod +x "${SAVE_DIR}/install.sh"
           done
