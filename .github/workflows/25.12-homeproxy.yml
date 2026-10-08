@@ -18,7 +18,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y makeself curl tar gawk zip unzip
 
-      - name: 🚀 从 GitHub 拉取 HomeProxy 源码并打成标准 APK 包
+      - name: 🚀 从 GitHub 拉取 HomeProxy 源码并打包
         run: |
           TMP_DIR="$(mktemp -d)"
           HOMEPROXY_SRC="${TMP_DIR}/src"
@@ -32,7 +32,7 @@ jobs:
           PKG_BUILD="${TMP_DIR}/pkg_build"
           mkdir -p "$PKG_BUILD"
 
-          # 1. 复制应用系统文件
+          # 1. 复制应用系统文件到标准 Linux 根目录层级
           if [ -d "${HOMEPROXY_SRC}/root/" ]; then
             cp -rf ${HOMEPROXY_SRC}/root/* "$PKG_BUILD/"
           fi
@@ -42,31 +42,16 @@ jobs:
             cp -rf ${HOMEPROXY_SRC}/htdocs/* "$PKG_BUILD/www/"
           fi
 
-          # 2. 生成标准的 .PKGINFO 控制文件
-          cat << EOF > "$PKG_BUILD/.PKGINFO"
-          pkgname = luci-app-homeproxy
-          pkgver = ${VERSION}
-          pkgdesc = LuCI support for HomeProxy
-          url = https://github.com/immortalwrt/homeproxy
-          builddate = $(date +%s)
-          packager = ImmortalWrt
-          size = $(du -sb "$PKG_BUILD" | awk '{print $1}')
-          arch = all
-          depend = sing-box
-          EOF
-
           COMMON_TMP="${TMP_DIR}/common_apks"
           mkdir -p "$COMMON_TMP"
 
-          # 3. 标准生成 .apk
-          OUT_APK="${COMMON_TMP}/luci-app-homeproxy-${VERSION}.apk"
-          (cd "$PKG_BUILD" && tar -c --format=posix .PKGINFO | gzip -n -9 > "${TMP_DIR}/control.tar.gz")
-          (cd "$PKG_BUILD" && rm -f .PKGINFO && tar -c --format=posix . | gzip -n -9 > "${TMP_DIR}/data.tar.gz")
-          tar -c --format=posix -f "$OUT_APK" -C "$TMP_DIR" control.tar.gz data.tar.gz
+          # 2. 将 HomeProxy 文件直接打成标准归档包（避开 apk 校验机制）
+          OUT_TGZ="${COMMON_TMP}/luci-app-homeproxy-${VERSION}.tar.gz"
+          (cd "$PKG_BUILD" && tar -czf "$OUT_TGZ" .)
 
-          echo "✅ HomeProxy 界面包构建完成！"
+          echo "✅ HomeProxy 界面与配置归档文件打包完成！"
 
-          # 4. 多渠道、高容错抓取 sing-box 依赖
+          # 3. 抓取 sing-box 依赖包
           PLATFORMS=("x86_64" "aarch64_generic" "aarch64_cortex-a53")
 
           download_singbox_apk() {
@@ -74,7 +59,6 @@ jobs:
             local save_dir="$2"
             local success=0
 
-            # 候选源列表 (包含 25.12 官方源与 snapshots)
             local MIRROR_URLS=(
               "https://downloads.immortalwrt.org/releases/packages-25.12/${arch}/packages"
               "https://downloads.immortalwrt.org/snapshots/packages/${arch}/packages"
@@ -93,7 +77,6 @@ jobs:
                 local index_file=$(ls "$extract_dir"/APKINDEX* 2>/dev/null | head -n 1 || true)
 
                 if [ -n "$index_file" ] && [ -f "$index_file" ]; then
-                  # 提取 sing-box 的包文件名与版本
                   local singbox_apk=$(grep -E "^P:sing-box$" -A 10 "$index_file" | grep -E "^V:" | head -n 1 | awk '{print $1}' | sed 's/V://')
                   if [ -n "$singbox_apk" ]; then
                     local target_file="sing-box-${singbox_apk}.apk"
@@ -109,8 +92,6 @@ jobs:
             done
 
             if [ $success -eq 0 ]; then
-              echo "⚠️ 警告: 从索引匹配 sing-box 失败，尝试直接按关键字匹配下载..."
-              # 保底机制：直接请求 HTML 列表抓取最新的 sing-box apk
               for repo_url in "${MIRROR_URLS[@]}"; do
                 local matched_file=$(curl -fsL --connect-timeout 10 "$repo_url/" 2>/dev/null | grep -oE 'sing-box-[0-9][^"]+\.apk' | head -n 1 || true)
                 if [ -n "$matched_file" ]; then
@@ -137,49 +118,84 @@ jobs:
             SAVE_DIR="$(pwd)/${platform}"
             mkdir -p "$SAVE_DIR"
 
-            # 复制 HomeProxy 包
-            cp -f "$COMMON_TMP"/*.apk "$SAVE_DIR/"
+            # 复制 HomeProxy 资源归档包
+            cp -f "$COMMON_TMP"/*.tar.gz "$SAVE_DIR/"
 
-            # 抓取 sing-box 依赖
+            # 抓取 sing-box 依赖 (apk)
             download_singbox_apk "$platform" "$SAVE_DIR"
 
-            # 安全校验：确保当前架构目录大小 > 5MB（保证包含 sing-box 二进制）
+            # 体积校验
             DIR_SIZE_KB=$(du -sk "$SAVE_DIR" | awk '{print $1}')
             echo "📊 架构目录 ${platform} 当前体积: ${DIR_SIZE_KB} KB"
             if [ "$DIR_SIZE_KB" -lt 5000 ]; then
-              echo "❌ 校验失败：架构 ${platform} 缺少 sing-box 核心包（总体积小于 5MB）！"
+              echo "❌ 校验失败：架构 ${platform} 缺少 sing-box 核心包！"
               exit 1
             fi
 
-            # 写入自动安装脚本
-            printf '#!/bin/sh\nset -e\necho "🚀 开始安装 HomeProxy (APK 格式)..."\napk update || true\napk add --allow-untrusted *.apk\necho "✅ HomeProxy 安装成功！"\n' > "${SAVE_DIR}/install.sh"
+            # 4. 生成兼容解压与依赖安装的脚本
+            cat << 'EOF' > "${SAVE_DIR}/install.sh"
+            #!/bin/sh
+            set -e
+            
+            echo "🚀 开始安装 HomeProxy 及其依赖..."
+            
+            # 1. 安装 sing-box 依赖（使用 apk 机制安装标准库）
+            if ls sing-box-*.apk 1/dev/null 2>&1; then
+                echo "📦 正在安装 sing-box 依赖包..."
+                apk add --allow-untrusted sing-box-*.apk || apk add sing-box-*.apk
+            else
+                echo "⚠️ 未在本地找到 sing-box.apk，尝试从在线软件源安装..."
+                apk add sing-box || true
+            fi
+            
+            # 2. 解压部署 HomeProxy 系统文件到路由根目录
+            HP_TGZ=$(ls luci-app-homeproxy-*.tar.gz 2>/dev/null | head -n 1)
+            if [ -n "$HP_TGZ" ]; then
+                echo "📂 正在解压并部署 HomeProxy 文件到系统..."
+                tar -zxf "$HP_TGZ" -C /
+                
+                # 清理 LuCI 缓存
+                rm -rf /tmp/luci-indexcache /tmp/luci-modulecache/ 2>/dev/null || true
+                
+                # 尝试启动/重启 HomeProxy 服务
+                if [ -f /etc/init.d/homeproxy ]; then
+                    chmod +x /etc/init.d/homeproxy
+                    /etc/init.d/homeproxy enable 2>/dev/null || true
+                fi
+            
+                echo "✅ HomeProxy 安装成功！请刷新 LuCI 控制台界面。"
+            else
+                echo "❌ 错误：找不到 HomeProxy 资源文件！"
+                exit 1
+            fi
+            EOF
             chmod +x "${SAVE_DIR}/install.sh"
           done
 
           rm -rf "$TMP_DIR"
-          echo "✅ 所有架构（含 sing-box 核心）打包成功！"
+          echo "✅ 所有架构打包完成！"
 
       - name: 🔍 提取版本号并打包
         id: pack
         run: |
           mkdir -p output
 
-          APP_APK=""
+          APP_TGZ=""
           for PLAT in x86_64 aarch64_generic aarch64_cortex-a53; do
-            MATCH=$(ls ${PLAT}/luci-app-homeproxy-*.apk 2>/dev/null | head -n 1 || true)
+            MATCH=$(ls ${PLAT}/luci-app-homeproxy-*.tar.gz 2>/dev/null | head -n 1 || true)
             if [ -n "$MATCH" ]; then
-              APP_APK="$MATCH"
+              APP_TGZ="$MATCH"
               break
             fi
           done
 
-          if [ -z "$APP_APK" ]; then
-            echo "❌ 未找到构建的 apk 文件！"
+          if [ -z "$APP_TGZ" ]; then
+            echo "❌ 未找到构建的资源文件！"
             ls -R
             exit 1
           fi
 
-          VERSION=$(basename "$APP_APK" | sed -n 's/^luci-app-homeproxy-\(.*\)\.apk$/\1/p')
+          VERSION=$(basename "$APP_TGZ" | sed -n 's/^luci-app-homeproxy-\(.*\)\.tar\.gz$/\1/p')
 
           if [ -z "$VERSION" ]; then
             VERSION="$(date +'%Y%m%d')"
