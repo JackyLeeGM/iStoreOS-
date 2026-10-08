@@ -2,28 +2,59 @@ name: Build 25.12 HomeProxy
 
 on:
   schedule:
-    - cron: "10 22 * * *"  # 北京时间早上 6 点 10 分
+    - cron: "0 22 * * *"  # 北京时间早上 6 点
   workflow_dispatch:
 
 jobs:
-  build_homeproxy_2512:
+  make-run:
     runs-on: ubuntu-22.04
-    permissions:
-      contents: write
+
     steps:
-      - name: 检出代码
+      - name: 📥 Checkout
         uses: actions/checkout@v6
 
-      - name: 安装依赖
+      - name: 📦 安装 makeself 工具
+        run: sudo apt-get update && sudo apt-get install -y makeself curl
+
+      - name: 🚀 下载 homeproxy 的所有 apk
         run: |
-          sudo apt-get update
-          sudo apt-get install -y makeself curl wget
+          chmod +x shell/hp25.sh
+          ./shell/hp25.sh
 
-      - name: 赋予脚本执行权限
-        run: chmod +x shell/hp25.sh
+      - name: 📋 拷贝 install.sh 到各平台目录
+        run: |
+          chmod +x shell/install.sh
+          cp shell/install.sh x86_64/install.sh
+          cp shell/install.sh aarch64_generic/install.sh
+          cp shell/install.sh aarch64_cortex-a53/install.sh
 
-      - name: 执行打包脚本
-        run: ./shell/hp25.sh --all
+      - name: 🔍 提取版本号并打包
+        id: pack
+        run: |
+          mkdir -p output
+
+          # 获取 APK 版本号
+          APP_APK=$(ls aarch64_generic/luci-app-homeproxy-*.apk 2>/dev/null | head -n 1 || true)
+          if [ -z "$APP_APK" ]; then
+            echo "❌ 未找到下载的 apk 文件"
+            exit 1
+          fi
+
+          VERSION=$(basename "$APP_APK" | sed -n 's/^luci-app-homeproxy-\(.*\)\.apk$/\1/p')
+
+          if [ -z "$VERSION" ]; then
+            echo "❌ 无法提取版本号"
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "提取到的版本号: $VERSION"
+
+          # 打包各个平台为 .run 文件
+          for PLATFORM in x86_64 aarch64_generic aarch64_cortex-a53; do
+            makeself "$PLATFORM" "output/25.12-homeproxy-${PLATFORM}-${VERSION}.run" \
+              "homeproxy ${PLATFORM} Installer v${VERSION}" ./install.sh
+          done
 
       - name: Set tag name
         id: vars
@@ -31,20 +62,10 @@ jobs:
           TODAY=$(date -u -d '+8 hour' +'%Y-%m-%d')
           echo "tag_name=$TODAY" >> $GITHUB_ENV
 
-      - name: 上传 Release（仅 .run 文件）
+      - name: Upload run files as release assets
         uses: softprops/action-gh-release@v3
         with:
-          files: dist/homeproxy-run/run/*.run
           tag_name: ${{ env.tag_name }}
-          name: "Daily Build - ${{ env.tag_name }}"
-          draft: false
-          overwrite_files: true
-          body: |
-             <p align="left">
-              <img src="https://img.shields.io/github/downloads/wkccd/CloudRunFilesBuilder/${{ env.tag_name }}/total?style=for-the-badge&label=%E4%BB%8A%E6%97%A5%E4%B8%8B%E8%BD%BD%E6%AC%A1%E6%95%B0&labelColor=blue&color=black"/>
-              <a href="https://wkdaily.cpolar.cn/archives/1">
-                <img src="https://img.shields.io/badge/可套用国内加速站下载-FC7C0D?logo=github&logoColor=fff&labelColor=000&style=for-the-badge"/>
-              </a>
-             </p>
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: "Daily Build 25.12 - ${{ env.tag_name }}"
+          files: output/*.run
+          token: ${{ secrets.GITHUB_TOKEN }}
