@@ -112,15 +112,8 @@ jobs:
             download_apk_multisource "$platform" "luci" "luci-i18n-homeproxy-zh-cn" "$SAVE_DIR"
             download_apk_multisource "$platform" "packages" "sing-box" "$SAVE_DIR"
 
-            # 写入标准的 install.sh（顶格无缩进，防止 EOF 解析异常）
-            cat << 'EOF' > "${SAVE_DIR}/install.sh"
-            #!/bin/sh
-            set -e
-            echo "🚀 开始安装 HomeProxy (APK 格式)..."
-            apk update || true
-            apk add --allow-untrusted *.apk
-            echo "✅ HomeProxy 安装成功！"
-            EOF
+            # 使用 printf 生成 install.sh，无任何 Here-Doc 语法冲突风险
+            printf '#!/bin/sh\nset -e\necho "🚀 开始安装 HomeProxy (APK 格式)..."\napk update || true\napk add --allow-untrusted *.apk\necho "✅ HomeProxy 安装成功！"\n' > "${SAVE_DIR}/install.sh"
             chmod +x "${SAVE_DIR}/install.sh"
           done
 
