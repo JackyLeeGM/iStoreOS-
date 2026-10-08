@@ -17,6 +17,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout repository
@@ -28,10 +30,9 @@ jobs:
       - name: Fetch latest prerelease info
         id: fetch_release
         run: |
-          curl -s https://api.github.com/repos/kenzok8/openwrt-daede/releases \
+          curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/kenzok8/openwrt-daede/releases \
             | jq 'map(select(.prerelease==false)) | sort_by(.published_at) | last' \
             > release.json
-
 
       - name: Parse asset download URLs
         id: parse_assets
@@ -70,13 +71,13 @@ jobs:
 
       - name: Check file sizes
         run: |
-          ls -lh makeself/openwrt-daede_*.run
+          # 修正处的匹配规则：检查 makeself 下所有以 .run 结尾的文件
+          ls -lh makeself/*.run
 
       - name: Preparing release name
         run: |
           release_name=$(TZ="Asia/Shanghai" date +'%Y-%m-%d %H:%M Build')
           echo "RELEASE_NAME=$release_name" >> $GITHUB_ENV
-
 
       - name: Set tag name
         id: vars
