@@ -43,8 +43,9 @@ jobs:
           fi
 
           # 2. 处理简体中文语言包 (PO -> JSON/LMO 兼容层)
-          I18N_DIR="$PKG_BUILD/usr/share/luci/i18n"
-          mkdir -p "$I18N_DIR"
+          I18N_DIR_1="$PKG_BUILD/usr/share/luci/i18n"
+          I18N_DIR_2="$PKG_BUILD/www/luci-static/resources/i18n"
+          mkdir -p "$I18N_DIR_1" "$I18N_DIR_2"
 
           PO_DIR=""
           if [ -d "${HOMEPROXY_SRC}/po/zh_Hans" ]; then
@@ -53,17 +54,20 @@ jobs:
             PO_DIR="${HOMEPROXY_SRC}/po/zh-cn"
           elif [ -d "${HOMEPROXY_SRC}/po/zh_CN" ]; then
             PO_DIR="${HOMEPROXY_SRC}/po/zh_CN"
+          elif [ -d "${HOMEPROXY_SRC}/po" ]; then
+            PO_DIR="${HOMEPROXY_SRC}/po"
           fi
 
           if [ -n "$PO_DIR" ]; then
-            echo "🌐 找到简体中文语言目录: $PO_DIR"
-            cp -rf "$PO_DIR"/* "$I18N_DIR/" 2>/dev/null || true
+            echo "🌐 找到语言目录: $PO_DIR"
+            cp -rf "$PO_DIR"/* "$I18N_DIR_1/" 2>/dev/null || true
 
-            python3 -c "
-            import os, json, re
+            cat << 'PYEOF' > "${TMP_DIR}/po_to_json.py"
+            import os, json, re, sys
             
-            po_dir = '$PO_DIR'
-            i18n_out = '$I18N_DIR'
+            po_dir = sys.argv[1]
+            out_dir1 = sys.argv[2]
+            out_dir2 = sys.argv[3]
             translations = {}
             
             for root, dirs, files in os.walk(po_dir):
@@ -72,16 +76,29 @@ jobs:
                         filepath = os.path.join(root, f)
                         with open(filepath, 'r', encoding='utf-8', errors='ignore') as pf:
                             content = pf.read()
-                            msgids = re.findall(r'msgid \"(.*?)\"\nmsgstr \"(.*?)\"', content, re.DOTALL)
-                            for item in msgids:
-                                if item[0] and item[1]:
-                                    translations[item[0]] = item[1]
-            
+                            # 匹配 PO 文件的 msgid 与 msgstr
+                            blocks = content.split('\n\n')
+                            for block in blocks:
+                                msgid_match = re.search(r'msgid\s+"(.*?)"', block, re.DOTALL)
+                                msgstr_match = re.search(r'msgstr\s+"(.*?)"', block, re.DOTALL)
+                                if msgid_match and msgstr_match:
+                                    k = msgid_match.group(1).replace('"\n"', '')
+                                    v = msgstr_match.group(1).replace('"\n"', '')
+                                    if k and v:
+                                        translations[k] = v
+
             if translations:
-                with open(os.path.join(i18n_out, 'homeproxy.zh-cn.json'), 'w', encoding='utf-8') as jf:
-                    json.dump({'': translations}, jf, ensure_ascii=False, indent=2)
-                print('✅ 已生成 homeproxy.zh-cn.json 中文语言文件')
-            " || true
+                json_data = json.dumps({'': translations}, ensure_ascii=False, indent=2)
+                for target_dir in [out_dir1, out_dir2]:
+                    os.makedirs(target_dir, exist_ok=True)
+                    with open(os.path.join(target_dir, 'homeproxy.zh-cn.json'), 'w', encoding='utf-8') as jf:
+                        jf.write(json_data)
+                    with open(os.path.join(target_dir, 'homeproxy.zh_Hans.json'), 'w', encoding='utf-8') as jf:
+                        jf.write(json_data)
+                print('✅ 已生成 homeproxy 中文语言 JSON 资源！')
+            PYEOF
+
+            python3 "${TMP_DIR}/po_to_json.py" "$PO_DIR" "$I18N_DIR_1" "$I18N_DIR_2" || true
           fi
 
           COMMON_TMP="${TMP_DIR}/common_apks"
@@ -174,7 +191,7 @@ jobs:
               exit 1
             fi
 
-            # 5. 生成安装脚本 (采用无语法风险的单引号及转义处理)
+            # 5. 生成安装脚本 (自动刷新 LuCI 缓存以生效中文)
             INSTALL_SCRIPT="${SAVE_DIR}/install.sh"
             {
               echo '#!/bin/sh'
@@ -200,7 +217,9 @@ jobs:
               echo '        chmod +x /etc/init.d/homeproxy'
               echo '        /etc/init.d/homeproxy enable 2>/dev/null || true'
               echo '    fi'
-              echo '    echo "✅ HomeProxy 安装完成！不影响当前后台登录，请手动刷新页面。"'
+              echo '    # 清理 LuCI 界面索引与模块缓存，使中文语言包立即生效'
+              echo '    rm -rf /tmp/luci-indexcache /tmp/luci-modulecache /tmp/luci-sessions*'
+              echo '    echo "✅ HomeProxy 安装完成！已更新语言缓存，请手动刷新页面。"'
               echo 'else'
               echo '    echo "❌ 找不到 HomeProxy 资源文件！"'
               echo '    exit 1'
