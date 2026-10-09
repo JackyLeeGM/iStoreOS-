@@ -16,9 +16,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    # 加上这一段授予写权限
-    permissions:
-      contents: write
 
     steps:
       - name: Checkout repository
@@ -30,52 +27,54 @@ jobs:
       - name: Fetch latest release tag from Passwall2
         id: fetch_latest_tag
         run: |
-          latest_tag=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/Openwrt-Passwall/openwrt-passwall2/releases/latest | jq -r '.tag_name')
+          latest_tag=$(curl -s https://api.github.com/repos/Openwrt-Passwall/openwrt-passwall2/releases/latest | jq -r '.tag_name')
           echo "LATEST_TAG=$latest_tag" >> $GITHUB_ENV
 
       - name: Download latest Passwall2 files
         run: |
           set -euxo pipefail
 
-          latest_tag=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/Openwrt-Passwall/openwrt-passwall2/releases/latest | jq -r '.tag_name')
+          latest_tag=$(curl -s https://api.github.com/repos/Openwrt-Passwall/openwrt-passwall2/releases/latest | jq -r '.tag_name')
           echo "tag name is $latest_tag"
 
           mkdir -p downloads
           cd downloads
 
-          # 1. 动态获取并下载 x86_64 zip 资源
-          x86_url=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/Openwrt-Passwall/openwrt-passwall2/releases/latest \
-            | jq -r '.assets[] | select(.name | test("x86_64.*\\.zip$")) | .browser_download_url' | head -1)
-          echo "x86_url = $x86_url"
-          curl -L --fail --retry 5 --retry-delay 3 -o passwall_packages_apk_x86_64.zip "$x86_url"
+          # 下载 x86_64 apk
+          curl -L --fail --retry 5 --retry-delay 3 \
+            -o passwall_packages_apk_x86_64.zip \
+            "https://github.com/Openwrt-Passwall/openwrt-passwall2/releases/download/${latest_tag}/passwall_packages_apk_x86_64.zip"
 
-          # 2. 动态获取并下载 aarch64 cortex-a53 zip 资源
-          a53_url=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/Openwrt-Passwall/openwrt-passwall2/releases/latest \
-            | jq -r '.assets[] | select(.name | test("(aarch64.*a53|cortex-a53).*\\.zip$")) | .browser_download_url' | head -1)
-          echo "a53_url = $a53_url"
-          curl -L --fail --retry 5 --retry-delay 3 -o passwall_packages_apk_aarch64_cortex-a53.zip "$a53_url"
+          # 下载 aarch64 a53 apk
+          curl -L --fail --retry 5 --retry-delay 3 \
+            -o passwall_packages_apk_aarch64_cortex-a53.zip \
+            "https://github.com/Openwrt-Passwall/openwrt-passwall2/releases/download/${latest_tag}/passwall_packages_apk_aarch64_cortex-a53.zip"
 
-          # 3. 动态获取并下载 aarch64 generic zip 资源
-          generic_url=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/Openwrt-Passwall/openwrt-passwall2/releases/latest \
-            | jq -r '.assets[] | select(.name | test("aarch64_generic.*\\.zip$")) | .browser_download_url' | head -1)
-          echo "generic_url = $generic_url"
-          curl -L --fail --retry 5 --retry-delay 3 -o passwall_packages_apk_aarch64_generic.zip "$generic_url"
+          # 下载 aarch64_generic apk
+          curl -L --fail --retry 5 --retry-delay 3 \
+            -o passwall_packages_apk_aarch64_generic.zip \
+            "https://github.com/Openwrt-Passwall/openwrt-passwall2/releases/download/${latest_tag}/passwall_packages_apk_aarch64_generic.zip"
 
-          # 4. 下载 luci app apk
-          luci_url=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/Openwrt-Passwall/openwrt-passwall2/releases/latest \
+          # 下载 luci app apk
+          luci_url=$(curl -s https://api.github.com/repos/Openwrt-Passwall/openwrt-passwall2/releases/latest \
             | jq -r '.assets[] | select(.name | test("luci-app-passwall2.*\\.apk$")) | .browser_download_url' | head -1)
+          
           echo "luci_url = $luci_url"
-          curl -L --fail --retry 5 --retry-delay 3 -o luci-app-passwall2.apk "$luci_url"
+          curl -L --fail --retry 5 --retry-delay 3 \
+            -o luci-app-passwall2.apk \
+            "$luci_url"
 
-          # 5. 下载 luci 简体中文语言包 apk
-          zh_url=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/Openwrt-Passwall/openwrt-passwall2/releases/latest \
+          # 下载 luci 简体中文语言包 apk
+          zh_url=$(curl -s https://api.github.com/repos/Openwrt-Passwall/openwrt-passwall2/releases/latest \
             | jq -r '.assets[] | select(.name | test("^luci-i18n-passwall2-zh-cn.*\\.apk$")) | .browser_download_url' | head -1)
+          
           echo "zh_url = $zh_url"
-          curl -L --fail --retry 5 --retry-delay 3 -o luci-i18n-passwall2-zh-cn.apk "$zh_url"
+          curl -L --fail --retry 5 --retry-delay 3 \
+            -o luci-i18n-passwall2-zh-cn.apk \
+            "$zh_url"
 
           echo "=== 下载完成 ==="
           ls -lh
-
       - name: Organize files for x86_64
         run: |
           mkdir -p passwall_x86_64/depends passwall_x86_64/main
@@ -126,9 +125,9 @@ jobs:
       - name: Create self-extracting packages
         run: |
           cd makeself
-          ./makeself.sh passwall_x86_64/ 25.12-passwall2_x86_64_${{ env.LATEST_TAG }}.run "by github action" ./install.sh
-          ./makeself.sh passwall_aarch64-a53/ 25.12-passwall2_aarch64_a53_${{ env.LATEST_TAG }}.run "by github action" ./install.sh
-          ./makeself.sh passwall_aarch64_generic/ 25.12-passwall2_aarch64_generic_${{ env.LATEST_TAG }}.run "by github action" ./install.sh
+          ./makeself.sh passwall_x86_64/ 25-passwall2_x86_64_${{ env.LATEST_TAG }}.run "by github action" ./install.sh
+          ./makeself.sh passwall_aarch64-a53/ 25-passwall2_aarch64_a53_${{ env.LATEST_TAG }}.run "by github action" ./install.sh
+          ./makeself.sh passwall_aarch64_generic/ 25-passwall2_aarch64_generic_${{ env.LATEST_TAG }}.run "by github action" ./install.sh
 
       - name: Check file sizes
         run: |
@@ -143,7 +142,7 @@ jobs:
         id: fetch_release_details
         run: |
           extra_content="![Github](https://img.shields.io/badge/Passwall2.run-123456?logo=github&logoColor=fff&labelColor=green&style=for-the-badge) [![Github](https://img.shields.io/badge/国内加速站下载-FC7C0D?logo=github&logoColor=fff&labelColor=000&style=for-the-badge)](https://wkdaily.cpolar.cn/archives/1) ![GitHub Downloads (all assets, specific tag)](https://img.shields.io/github/downloads/wukongdaily/RunFilesBuilder/${{ env.LATEST_TAG }}/total?style=for-the-badge&labelColor=black&color=%2325c2a0)"
-          release_notes=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/Openwrt-Passwall/openwrt-passwall2/releases/latest | jq -r '.body')
+          release_notes=$(curl -s https://api.github.com/repos/Openwrt-Passwall/openwrt-passwall2/releases/latest | jq -r '.body')
           if [ -z "$release_notes" ]; then
             release_notes="No release notes available."
           fi
