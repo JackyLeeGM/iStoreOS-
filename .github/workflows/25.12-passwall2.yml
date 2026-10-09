@@ -116,22 +116,43 @@ jobs:
           set -e
           echo "🚀 开始安装 Passwall2 及其依赖组件..."
 
-          # 1. 安全离线安装依赖与组件（跳过可能导致内核 Panic 的热加载 post-install 脚本）
-          if ls depends/*.apk 1/dev/null 2>&1; then
-              echo "📦 正在离线部署 Passwall2 核心组件..."
+          # 1. 离线安装 Passwall2 核心依赖
+          DEP_PKGS=$(ls depends/*.apk 2>/dev/null || true)
+          if [ -n "$DEP_PKGS" ]; then
+              echo "📦 正在离线安装 Passwall2 依赖包..."
               apk add --allow-untrusted --no-scripts depends/*.apk || apk add --allow-untrusted depends/*.apk || true
           fi
 
-          # 2. 安装 LuCI 界面与语言包
-          if ls main/*.apk 1/dev/null 2>&1; then
+          # 2. 安装 LuCI 界面与简体中文语言包
+          MAIN_PKGS=$(ls main/*.apk 2>/dev/null || true)
+          if [ -n "$MAIN_PKGS" ]; then
               echo "📦 正在安装 Passwall2 控制台界面..."
               apk add --allow-untrusted main/*.apk
           fi
 
-          # 3. 刷新 LuCI 界面缓存
+          # 3. 自动注入菜单 ACL 权限定义（防止后台隐藏菜单）
+          mkdir -p /usr/share/luci/acl.d/
+          cat << 'ACL_EOF' > /usr/share/luci/acl.d/luci-app-passwall2.json
+          {
+            "luci-app-passwall2": {
+              "description": "Grant access to Passwall2",
+              "read": {
+                "ubus": { "passwall2": [ "*" ] },
+                "uci": [ "passwall2" ]
+              },
+              "write": {
+                "ubus": { "passwall2": [ "*" ] },
+                "uci": [ "passwall2" ]
+              }
+            }
+          }
+          ACL_EOF
+
+          # 4. 重载 rpcd 服务并清理界面缓存
+          /etc/init.d/rpcd restart 2>/dev/null || true
           rm -rf /tmp/luci-indexcache /tmp/luci-modulecache 2>/dev/null || true
 
-          echo "✅ Passwall2 安装完成！请刷新 LuCI 控制台网页界面。"
+          echo "✅ Passwall2 安装完成！请刷新后台网页即可正常显示插件界面。"
           EOF
           chmod +x passwall_x86_64/install.sh
           cp passwall_x86_64/install.sh passwall_aarch64-a53/install.sh
