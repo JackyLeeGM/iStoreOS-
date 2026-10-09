@@ -19,7 +19,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Clone makeself repository
         run: git clone https://github.com/megastep/makeself.git
@@ -40,20 +40,29 @@ jobs:
           mkdir -p downloads
           cd downloads
 
-          # 下载 x86_64 apk
+          # 动态匹配 x86_64 依赖压缩包 URL
+          x86_url=$(curl -s https://api.github.com/repos/Openwrt-Passwall/openwrt-passwall2/releases/latest \
+            | jq -r '.assets[] | select(.name | test("passwall_packages_.*x86_64.*\\.zip$")) | .browser_download_url' | head -1)
+
           curl -L --fail --retry 5 --retry-delay 3 \
             -o passwall_packages_apk_x86_64.zip \
-            "https://github.com/Openwrt-Passwall/openwrt-passwall2/releases/download/${latest_tag}/passwall_packages_apk_x86_64.zip"
+            "$x86_url"
 
-          # 下载 aarch64 a53 apk
+          # 动态匹配 aarch64 cortex-a53 依赖压缩包 URL
+          a53_url=$(curl -s https://api.github.com/repos/Openwrt-Passwall/openwrt-passwall2/releases/latest \
+            | jq -r '.assets[] | select(.name | test("passwall_packages_.*cortex-a53.*\\.zip$")) | .browser_download_url' | head -1)
+
           curl -L --fail --retry 5 --retry-delay 3 \
             -o passwall_packages_apk_aarch64_cortex-a53.zip \
-            "https://github.com/Openwrt-Passwall/openwrt-passwall2/releases/download/${latest_tag}/passwall_packages_apk_aarch64_cortex-a53.zip"
+            "$a53_url"
 
-          # 下载 aarch64_generic apk
+          # 动态匹配 aarch64 generic 依赖压缩包 URL
+          generic_url=$(curl -s https://api.github.com/repos/Openwrt-Passwall/openwrt-passwall2/releases/latest \
+            | jq -r '.assets[] | select(.name | test("passwall_packages_.*aarch64_generic.*\\.zip$")) | .browser_download_url' | head -1)
+
           curl -L --fail --retry 5 --retry-delay 3 \
             -o passwall_packages_apk_aarch64_generic.zip \
-            "https://github.com/Openwrt-Passwall/openwrt-passwall2/releases/download/${latest_tag}/passwall_packages_apk_aarch64_generic.zip"
+            "$generic_url"
 
           # 下载 luci app apk
           luci_url=$(curl -s https://api.github.com/repos/Openwrt-Passwall/openwrt-passwall2/releases/latest \
@@ -75,6 +84,7 @@ jobs:
 
           echo "=== 下载完成 ==="
           ls -lh
+
       - name: Organize files for x86_64
         run: |
           mkdir -p passwall_x86_64/depends passwall_x86_64/main
@@ -125,9 +135,9 @@ jobs:
       - name: Create self-extracting packages
         run: |
           cd makeself
-          ./makeself.sh passwall_x86_64/ 25-passwall2_x86_64_${{ env.LATEST_TAG }}.run "by github action" ./install.sh
-          ./makeself.sh passwall_aarch64-a53/ 25-passwall2_aarch64_a53_${{ env.LATEST_TAG }}.run "by github action" ./install.sh
-          ./makeself.sh passwall_aarch64_generic/ 25-passwall2_aarch64_generic_${{ env.LATEST_TAG }}.run "by github action" ./install.sh
+          ./makeself.sh passwall_x86_64/ 25.12-passwall2_x86_64_${{ env.LATEST_TAG }}.run "by github action" ./install.sh
+          ./makeself.sh passwall_aarch64-a53/ 25.12-passwall2_aarch64_a53_${{ env.LATEST_TAG }}.run "by github action" ./install.sh
+          ./makeself.sh passwall_aarch64_generic/ 25.12-passwall2_aarch64_generic_${{ env.LATEST_TAG }}.run "by github action" ./install.sh
 
       - name: Check file sizes
         run: |
@@ -157,7 +167,7 @@ jobs:
         run: |
           TODAY=$(date -u -d '+8 hour' +'%Y-%m-%d')
           echo "tag_name=$TODAY" >> $GITHUB_ENV
-          
+
       - name: Upload run files as release assets
         uses: softprops/action-gh-release@v3
         with:
