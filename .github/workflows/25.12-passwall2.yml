@@ -111,19 +111,27 @@ jobs:
 
       - name: Create install.sh scripts
         run: |
-          cat <<EOF > passwall_x86_64/install.sh
+          cat << 'EOF' > passwall_x86_64/install.sh
           #!/bin/sh
-          apk update
-          if [ $? -ne 0 ]; then
-              echo "update failed"
-              exit 1
+          set -e
+          echo "🚀 开始安装 Passwall2 及其依赖组件..."
+
+          # 1. 安全离线安装依赖与组件（跳过可能导致内核 Panic 的热加载 post-install 脚本）
+          if ls depends/*.apk 1/dev/null 2>&1; then
+              echo "📦 正在离线部署 Passwall2 核心组件..."
+              apk add --allow-untrusted --no-scripts depends/*.apk || apk add --allow-untrusted depends/*.apk || true
           fi
-          apk add iptables-mod-tproxy
-          apk add iptables-mod-socket
-          apk add iptables-mod-iprange
-          apk add iptables-mod-conntrack-extra
-          apk add --allow-untrusted depends/*.apk
-          apk add --allow-untrusted main/*.apk
+
+          # 2. 安装 LuCI 界面与语言包
+          if ls main/*.apk 1/dev/null 2>&1; then
+              echo "📦 正在安装 Passwall2 控制台界面..."
+              apk add --allow-untrusted main/*.apk
+          fi
+
+          # 3. 刷新 LuCI 界面缓存
+          rm -rf /tmp/luci-indexcache /tmp/luci-modulecache 2>/dev/null || true
+
+          echo "✅ Passwall2 安装完成！请刷新 LuCI 控制台网页界面。"
           EOF
           chmod +x passwall_x86_64/install.sh
           cp passwall_x86_64/install.sh passwall_aarch64-a53/install.sh
