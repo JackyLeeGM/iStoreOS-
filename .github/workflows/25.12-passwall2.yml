@@ -126,7 +126,7 @@ jobs:
           # 2. 安装 LuCI 界面与简体中文语言包
           MAIN_PKGS=$(ls main/*.apk 2>/dev/null || true)
           if [ -n "$MAIN_PKGS" ]; then
-              echo "📦 正在安装 Passwall2 控制台界面..."
+              echo "📦 正在安装 Passwall2 控制台界面与语言包..."
               apk add --allow-untrusted main/*.apk
           fi
 
@@ -148,11 +148,14 @@ jobs:
           }
           ACL_EOF
 
-          # 4. 重载 rpcd 服务并清理界面缓存
-          /etc/init.d/rpcd restart 2>/dev/null || true
+          # 4. 锁定并保障系统及插件默认语言为简体中文
+          uci set luci.main.lang='zh_cn' 2>/dev/null || uci set luci.main.lang='zh-cn' 2>/dev/null || true
+          uci commit luci 2>/dev/null || true
+
+          # 5. 仅清理界面索引与模块缓存（保留登录 Session 避免被强制登出）
           rm -rf /tmp/luci-indexcache /tmp/luci-modulecache 2>/dev/null || true
 
-          echo "✅ Passwall2 安装完成！请刷新后台网页即可正常显示插件界面。"
+          echo "✅ Passwall2 安装完成！刷新后台网页即可直接使用中文界面。"
           EOF
           chmod +x passwall_x86_64/install.sh
           cp passwall_x86_64/install.sh passwall_aarch64-a53/install.sh
