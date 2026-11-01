@@ -11,13 +11,10 @@
 >> iStoreOS 可以在iStore商店手动安装<br>
 >> ImmortalWrt或者其他OpenWrt 可下载后 使用 `sh xxx.run `来安装<br>
 >> 使用 `sh xxx.run --target dir --noexec ` 只解压到dir目录 不执行安装
-> <img src="https://github.com/user-attachments/assets/3f5dabba-1efa-4e67-bf5b-86a27c114902" height=40>
 
 
 
 ## run文件安装方法
-## Install by iStore 
-<img src=https://camo.githubusercontent.com/0a783d7ece59c727a1eef024855606c2b87be6acec14192e8103cf8c601d44eb/68747470733a2f2f63646e2e6a7364656c6976722e6e65742f67682f41554b393532372f4172652d752d6f6b406d61737465722f617070732f696e7374616c6c2e706e67>
 
 
 ## Install By Command
